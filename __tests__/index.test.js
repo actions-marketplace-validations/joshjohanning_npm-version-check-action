@@ -368,6 +368,331 @@ describe('npm Version Check Action - Helper Functions', () => {
     });
   });
 
+  describe('parseNodeRuntime', () => {
+    test('should parse node version from standard action.yml content', () => {
+      const { parseNodeRuntime } = indexModule;
+
+      const content = `name: 'my-action'\nruns:\n  using: 'node20'\n  main: 'dist/index.js'\n`;
+      expect(parseNodeRuntime(content)).toBe(20);
+    });
+
+    test('should parse node24 runtime', () => {
+      const { parseNodeRuntime } = indexModule;
+
+      const content = `name: 'my-action'\nruns:\n  using: 'node24'\n  main: 'dist/index.js'\n`;
+      expect(parseNodeRuntime(content)).toBe(24);
+    });
+
+    test('should parse runtime without quotes', () => {
+      const { parseNodeRuntime } = indexModule;
+
+      const content = `name: 'my-action'\nruns:\n  using: node20\n  main: 'dist/index.js'\n`;
+      expect(parseNodeRuntime(content)).toBe(20);
+    });
+
+    test('should parse runtime with double quotes', () => {
+      const { parseNodeRuntime } = indexModule;
+
+      const content = 'name: "my-action"\nruns:\n  using: "node20"\n  main: "dist/index.js"\n';
+      expect(parseNodeRuntime(content)).toBe(20);
+    });
+
+    test('should return null for composite actions', () => {
+      const { parseNodeRuntime } = indexModule;
+
+      const content = `name: 'my-action'\nruns:\n  using: 'composite'\n  steps:\n    - run: echo hello\n`;
+      expect(parseNodeRuntime(content)).toBeNull();
+    });
+
+    test('should return null for null/undefined/empty input', () => {
+      const { parseNodeRuntime } = indexModule;
+
+      expect(parseNodeRuntime(null)).toBeNull();
+      expect(parseNodeRuntime(undefined)).toBeNull();
+      expect(parseNodeRuntime('')).toBeNull();
+      expect(parseNodeRuntime(123)).toBeNull();
+    });
+
+    test('should return null when runs section is missing', () => {
+      const { parseNodeRuntime } = indexModule;
+
+      const content = `name: 'my-action'\ndescription: 'A test action'\n`;
+      expect(parseNodeRuntime(content)).toBeNull();
+    });
+
+    test('should handle action.yml with extra whitespace around using value', () => {
+      const { parseNodeRuntime } = indexModule;
+
+      const content = `name: 'my-action'\nruns:\n  using:   'node20'  \n  main: 'dist/index.js'\n`;
+      expect(parseNodeRuntime(content)).toBe(20);
+    });
+
+    test('should return null for docker runtime', () => {
+      const { parseNodeRuntime } = indexModule;
+
+      const content = `name: 'my-action'\nruns:\n  using: 'docker'\n  image: 'Dockerfile'\n`;
+      expect(parseNodeRuntime(content)).toBeNull();
+    });
+
+    test('should handle node12 and node16 (older runtimes)', () => {
+      const { parseNodeRuntime } = indexModule;
+
+      expect(parseNodeRuntime(`runs:\n  using: 'node12'\n`)).toBe(12);
+      expect(parseNodeRuntime(`runs:\n  using: 'node16'\n`)).toBe(16);
+    });
+
+    test('should ignore commented-out using lines', () => {
+      const { parseNodeRuntime } = indexModule;
+
+      const content = `name: 'my-action'\nruns:\n  # using: 'node20'\n  using: 'node24'\n  main: 'dist/index.js'\n`;
+      expect(parseNodeRuntime(content)).toBe(24);
+    });
+
+    test('should return null when using is only in a comment', () => {
+      const { parseNodeRuntime } = indexModule;
+
+      const content = `name: 'my-action'\nruns:\n  # using: 'node20'\n  main: 'dist/index.js'\n`;
+      expect(parseNodeRuntime(content)).toBeNull();
+    });
+  });
+
+  describe('isMajorVersionBump', () => {
+    test('should return true for major version bump', () => {
+      const { isMajorVersionBump } = indexModule;
+
+      expect(isMajorVersionBump('2.0.0', '1.0.0')).toBe(true);
+      expect(isMajorVersionBump('3.0.0', '2.5.1')).toBe(true);
+      expect(isMajorVersionBump('10.0.0', '9.99.99')).toBe(true);
+    });
+
+    test('should return false for minor version bump', () => {
+      const { isMajorVersionBump } = indexModule;
+
+      expect(isMajorVersionBump('1.1.0', '1.0.0')).toBe(false);
+      expect(isMajorVersionBump('1.5.0', '1.4.3')).toBe(false);
+    });
+
+    test('should return false for patch version bump', () => {
+      const { isMajorVersionBump } = indexModule;
+
+      expect(isMajorVersionBump('1.0.1', '1.0.0')).toBe(false);
+      expect(isMajorVersionBump('1.0.5', '1.0.4')).toBe(false);
+    });
+
+    test('should return false for same version', () => {
+      const { isMajorVersionBump } = indexModule;
+
+      expect(isMajorVersionBump('1.0.0', '1.0.0')).toBe(false);
+    });
+
+    test('should return false for invalid versions', () => {
+      const { isMajorVersionBump } = indexModule;
+
+      expect(isMajorVersionBump('invalid', '1.0.0')).toBe(false);
+      expect(isMajorVersionBump('1.0.0', 'invalid')).toBe(false);
+    });
+
+    test('should return false for null or undefined versions', () => {
+      const { isMajorVersionBump } = indexModule;
+
+      expect(isMajorVersionBump(null, '1.0.0')).toBe(false);
+      expect(isMajorVersionBump('1.0.0', null)).toBe(false);
+      expect(isMajorVersionBump(undefined, '1.0.0')).toBe(false);
+      expect(isMajorVersionBump(null, null)).toBe(false);
+    });
+
+    test('should return true for major bump with prerelease versions', () => {
+      const { isMajorVersionBump } = indexModule;
+
+      expect(isMajorVersionBump('2.0.0-beta.1', '1.5.0')).toBe(true);
+    });
+
+    test('should return false for version downgrade across major', () => {
+      const { isMajorVersionBump } = indexModule;
+
+      // 1.0.0 -> 0.9.0 is NOT a major bump, it is a downgrade
+      expect(isMajorVersionBump('0.9.0', '1.0.0')).toBe(false);
+    });
+  });
+
+  describe('detectNodeRuntimeChange', () => {
+    beforeEach(() => {
+      jest.clearAllMocks();
+    });
+
+    test('should detect runtime change from node20 to node24', async () => {
+      const { detectNodeRuntimeChange } = indexModule;
+
+      const baseActionYml = `name: 'my-action'\nruns:\n  using: 'node20'\n  main: 'dist/index.js'\n`;
+      const headActionYml = `name: 'my-action'\nruns:\n  using: 'node24'\n  main: 'dist/index.js'\n`;
+
+      mockExec.exec.mockImplementation(async (command, args, options) => {
+        if (args.includes('show') && args[1] === `${TEST_BASE_SHA}:action.yml`) {
+          options.listeners.stdout(Buffer.from(baseActionYml));
+        } else if (args.includes('show') && args[1] === `${TEST_HEAD_SHA}:action.yml`) {
+          options.listeners.stdout(Buffer.from(headActionYml));
+        }
+        return 0;
+      });
+
+      const result = await detectNodeRuntimeChange(TEST_BASE_SHA, TEST_HEAD_SHA, 'action.yml');
+      expect(result.changed).toBe(true);
+      expect(result.baseVersion).toBe(20);
+      expect(result.headVersion).toBe(24);
+    });
+
+    test('should return no change when runtime is the same', async () => {
+      const { detectNodeRuntimeChange } = indexModule;
+
+      const actionYml = `name: 'my-action'\nruns:\n  using: 'node20'\n  main: 'dist/index.js'\n`;
+
+      mockExec.exec.mockImplementation(async (command, args, options) => {
+        if (
+          args.includes('show') &&
+          (args[1] === `${TEST_BASE_SHA}:action.yml` || args[1] === `${TEST_HEAD_SHA}:action.yml`)
+        ) {
+          options.listeners.stdout(Buffer.from(actionYml));
+        }
+        return 0;
+      });
+
+      const result = await detectNodeRuntimeChange(TEST_BASE_SHA, TEST_HEAD_SHA, 'action.yml');
+      expect(result.changed).toBe(false);
+      expect(result.baseVersion).toBe(20);
+      expect(result.headVersion).toBe(20);
+    });
+
+    test('should return no change when action.yml does not exist at base ref', async () => {
+      const { detectNodeRuntimeChange } = indexModule;
+
+      mockExec.exec.mockImplementation(async (command, args, options) => {
+        if (args.includes('show') && args[1] === `${TEST_BASE_SHA}:action.yml`) {
+          throw new Error('File not found');
+        } else if (args.includes('show') && args[1] === `${TEST_HEAD_SHA}:action.yml`) {
+          options.listeners.stdout(
+            Buffer.from(`name: 'my-action'\nruns:\n  using: 'node20'\n  main: 'dist/index.js'\n`)
+          );
+        }
+        return 0;
+      });
+
+      const result = await detectNodeRuntimeChange(TEST_BASE_SHA, TEST_HEAD_SHA, 'action.yml');
+      expect(result.changed).toBe(false);
+    });
+
+    test('should return no change for composite action', async () => {
+      const { detectNodeRuntimeChange } = indexModule;
+
+      const actionYml = `name: 'my-action'\nruns:\n  using: 'composite'\n  steps:\n    - run: echo hello\n`;
+
+      mockExec.exec.mockImplementation(async (command, args, options) => {
+        if (
+          args.includes('show') &&
+          (args[1] === `${TEST_BASE_SHA}:action.yml` || args[1] === `${TEST_HEAD_SHA}:action.yml`)
+        ) {
+          options.listeners.stdout(Buffer.from(actionYml));
+        }
+        return 0;
+      });
+
+      const result = await detectNodeRuntimeChange(TEST_BASE_SHA, TEST_HEAD_SHA, 'action.yml');
+      expect(result.changed).toBe(false);
+      expect(result.baseVersion).toBeNull();
+      expect(result.headVersion).toBeNull();
+    });
+
+    test('should return no change when action.yml does not exist at head ref', async () => {
+      const { detectNodeRuntimeChange } = indexModule;
+
+      mockExec.exec.mockImplementation(async (command, args, options) => {
+        if (args.includes('show') && args[1] === `${TEST_BASE_SHA}:action.yml`) {
+          options.listeners.stdout(
+            Buffer.from(`name: 'my-action'\nruns:\n  using: 'node20'\n  main: 'dist/index.js'\n`)
+          );
+        } else if (args.includes('show') && args[1] === `${TEST_HEAD_SHA}:action.yml`) {
+          throw new Error('File not found');
+        }
+        return 0;
+      });
+
+      const result = await detectNodeRuntimeChange(TEST_BASE_SHA, TEST_HEAD_SHA, 'action.yml');
+      expect(result.changed).toBe(false);
+    });
+
+    test('should return no change when action.yml does not exist at either ref', async () => {
+      const { detectNodeRuntimeChange } = indexModule;
+
+      mockExec.exec.mockImplementation(async (command, args) => {
+        if (args.includes('show') && args[1]?.includes('action.yml')) {
+          throw new Error('File not found');
+        }
+        return 0;
+      });
+
+      const result = await detectNodeRuntimeChange(TEST_BASE_SHA, TEST_HEAD_SHA, 'action.yml');
+      expect(result.changed).toBe(false);
+    });
+
+    test('should detect runtime downgrade from node24 to node20', async () => {
+      const { detectNodeRuntimeChange } = indexModule;
+
+      const baseActionYml = `name: 'my-action'\nruns:\n  using: 'node24'\n  main: 'dist/index.js'\n`;
+      const headActionYml = `name: 'my-action'\nruns:\n  using: 'node20'\n  main: 'dist/index.js'\n`;
+
+      mockExec.exec.mockImplementation(async (command, args, options) => {
+        if (args.includes('show') && args[1] === `${TEST_BASE_SHA}:action.yml`) {
+          options.listeners.stdout(Buffer.from(baseActionYml));
+        } else if (args.includes('show') && args[1] === `${TEST_HEAD_SHA}:action.yml`) {
+          options.listeners.stdout(Buffer.from(headActionYml));
+        }
+        return 0;
+      });
+
+      const result = await detectNodeRuntimeChange(TEST_BASE_SHA, TEST_HEAD_SHA, 'action.yml');
+      expect(result.changed).toBe(true);
+      expect(result.baseVersion).toBe(24);
+      expect(result.headVersion).toBe(20);
+    });
+
+    test('should return no change when runtime switches from node to composite', async () => {
+      const { detectNodeRuntimeChange } = indexModule;
+
+      const baseActionYml = `name: 'my-action'\nruns:\n  using: 'node20'\n  main: 'dist/index.js'\n`;
+      const headActionYml = `name: 'my-action'\nruns:\n  using: 'composite'\n  steps:\n    - run: echo hello\n`;
+
+      mockExec.exec.mockImplementation(async (command, args, options) => {
+        if (args.includes('show') && args[1] === `${TEST_BASE_SHA}:action.yml`) {
+          options.listeners.stdout(Buffer.from(baseActionYml));
+        } else if (args.includes('show') && args[1] === `${TEST_HEAD_SHA}:action.yml`) {
+          options.listeners.stdout(Buffer.from(headActionYml));
+        }
+        return 0;
+      });
+
+      const result = await detectNodeRuntimeChange(TEST_BASE_SHA, TEST_HEAD_SHA, 'action.yml');
+      expect(result.changed).toBe(false);
+    });
+
+    test('should return no change when runtime switches from composite to node', async () => {
+      const { detectNodeRuntimeChange } = indexModule;
+
+      const baseActionYml = `name: 'my-action'\nruns:\n  using: 'composite'\n  steps:\n    - run: echo hello\n`;
+      const headActionYml = `name: 'my-action'\nruns:\n  using: 'node20'\n  main: 'dist/index.js'\n`;
+
+      mockExec.exec.mockImplementation(async (command, args, options) => {
+        if (args.includes('show') && args[1] === `${TEST_BASE_SHA}:action.yml`) {
+          options.listeners.stdout(Buffer.from(baseActionYml));
+        } else if (args.includes('show') && args[1] === `${TEST_HEAD_SHA}:action.yml`) {
+          options.listeners.stdout(Buffer.from(headActionYml));
+        }
+        return 0;
+      });
+
+      const result = await detectNodeRuntimeChange(TEST_BASE_SHA, TEST_HEAD_SHA, 'action.yml');
+      expect(result.changed).toBe(false);
+    });
+  });
+
   describe('hasRelevantFileChanges', () => {
     test('should return true when relevant files are changed', () => {
       const { hasRelevantFileChanges } = indexModule;
@@ -468,6 +793,148 @@ describe('npm Version Check Action - Helper Functions', () => {
       mockFs.readFileSync.mockReturnValue(JSON.stringify(mockPackageJson));
 
       expect(() => readPackageJson('package.json')).toThrow('Could not extract version from package.json');
+    });
+  });
+
+  describe('validatePackageVersionConsistency', () => {
+    let mockFs;
+
+    beforeAll(async () => {
+      mockFs = await import('fs');
+    });
+
+    beforeEach(() => {
+      mockFs.existsSync.mockClear();
+      mockFs.readFileSync.mockClear();
+    });
+
+    test('should return valid when versions match', () => {
+      const { validatePackageVersionConsistency } = indexModule;
+      const mockPackageJson = { name: 'test-package', version: '1.2.3' };
+      const mockPackageLock = { name: 'test-package', version: '1.2.3', lockfileVersion: 3 };
+
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockImplementation(filePath => {
+        if (filePath === 'package.json') {
+          return JSON.stringify(mockPackageJson);
+        }
+        if (filePath === 'package-lock.json') {
+          return JSON.stringify(mockPackageLock);
+        }
+        throw new Error(`Unexpected file: ${filePath}`);
+      });
+
+      const result = validatePackageVersionConsistency('package.json');
+      expect(result.isValid).toBe(true);
+      expect(result.packageVersion).toBe('1.2.3');
+      expect(result.lockVersion).toBe('1.2.3');
+      expect(result.error).toBeNull();
+    });
+
+    test('should return invalid when versions do not match', () => {
+      const { validatePackageVersionConsistency } = indexModule;
+      const mockPackageJson = { name: 'test-package', version: '1.2.4' };
+      const mockPackageLock = { name: 'test-package', version: '1.2.3', lockfileVersion: 3 };
+
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockImplementation(filePath => {
+        if (filePath === 'package.json') {
+          return JSON.stringify(mockPackageJson);
+        }
+        if (filePath === 'package-lock.json') {
+          return JSON.stringify(mockPackageLock);
+        }
+        throw new Error(`Unexpected file: ${filePath}`);
+      });
+
+      const result = validatePackageVersionConsistency('package.json');
+      expect(result.isValid).toBe(false);
+      expect(result.packageVersion).toBe('1.2.4');
+      expect(result.lockVersion).toBe('1.2.3');
+      expect(result.error).toContain('Version mismatch');
+      expect(result.error).toContain('1.2.4');
+      expect(result.error).toContain('1.2.3');
+    });
+
+    test('should return valid when package-lock.json does not exist', () => {
+      const { validatePackageVersionConsistency } = indexModule;
+      const mockPackageJson = { name: 'test-package', version: '1.2.3' };
+
+      mockFs.existsSync.mockImplementation(filePath => {
+        if (filePath === 'package.json') return true;
+        if (filePath === 'package-lock.json') return false;
+        return false;
+      });
+      mockFs.readFileSync.mockReturnValue(JSON.stringify(mockPackageJson));
+
+      const result = validatePackageVersionConsistency('package.json');
+      expect(result.isValid).toBe(true);
+      expect(result.packageVersion).toBe('1.2.3');
+      expect(result.lockVersion).toBeNull();
+      expect(result.error).toBeNull();
+    });
+
+    test('should return invalid when package.json does not exist', () => {
+      const { validatePackageVersionConsistency } = indexModule;
+
+      mockFs.existsSync.mockReturnValue(false);
+
+      const result = validatePackageVersionConsistency('package.json');
+      expect(result.isValid).toBe(false);
+      expect(result.error).toContain('package.json not found');
+    });
+
+    test('should return invalid for invalid JSON in package.json', () => {
+      const { validatePackageVersionConsistency } = indexModule;
+
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockReturnValue('{ invalid json }');
+
+      const result = validatePackageVersionConsistency('package.json');
+      expect(result.isValid).toBe(false);
+      expect(result.error).toContain('Invalid JSON');
+    });
+
+    test('should return invalid for invalid JSON in package-lock.json', () => {
+      const { validatePackageVersionConsistency } = indexModule;
+      const mockPackageJson = { name: 'test-package', version: '1.2.3' };
+
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockImplementation(filePath => {
+        if (filePath === 'package.json') {
+          return JSON.stringify(mockPackageJson);
+        }
+        if (filePath === 'package-lock.json') {
+          return '{ invalid json }';
+        }
+        throw new Error(`Unexpected file: ${filePath}`);
+      });
+
+      const result = validatePackageVersionConsistency('package.json');
+      expect(result.isValid).toBe(false);
+      expect(result.error).toContain('Invalid JSON');
+    });
+
+    test('should handle nested package.json path correctly', () => {
+      const { validatePackageVersionConsistency } = indexModule;
+      const mockPackageJson = { name: 'test-package', version: '2.0.0' };
+      const mockPackageLock = { name: 'test-package', version: '2.0.0', lockfileVersion: 3 };
+
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockImplementation(filePath => {
+        if (filePath === 'packages/subproject/package.json') {
+          return JSON.stringify(mockPackageJson);
+        }
+        if (filePath === 'packages/subproject/package-lock.json') {
+          return JSON.stringify(mockPackageLock);
+        }
+        throw new Error(`Unexpected file: ${filePath}`);
+      });
+
+      const result = validatePackageVersionConsistency('packages/subproject/package.json');
+      expect(result.isValid).toBe(true);
+      expect(result.packageVersion).toBe('2.0.0');
+      expect(result.lockVersion).toBe('2.0.0');
     });
   });
 
@@ -1239,6 +1706,665 @@ describe('hasPackageDependencyChanges', () => {
     expect(result).toEqual({ hasChanges: false, onlyDevDependencies: true });
   });
 
+  test('should treat lockfile reshuffling as dev-only when package.json shows no production changes', async () => {
+    const { hasPackageDependencyChanges } = indexModule;
+
+    // This reproduces the real-world scenario from PR #74: updating jest (devDep) causes npm
+    // to reshuffle shared transitive dependencies like ansi-regex/strip-ansi between the
+    // yargs (prod) and jest (dev) trees. The hoisted packages lack "dev": true because they
+    // are shared. The tree walk must follow the full chain: jest -> jest-cli -> yargs ->
+    // cliui -> wrap-ansi -> strip-ansi -> ansi-regex, handling nested node_modules resolution.
+
+    // Base package.json
+    const basePackageJson = {
+      name: 'my-org-tool',
+      version: '2.0.0',
+      dependencies: {
+        yargs: '^17.0.0'
+      },
+      devDependencies: {
+        jest: '^29.0.0'
+      }
+    };
+
+    // Head package.json - ONLY devDependencies updated
+    const headPackageJson = {
+      name: 'my-org-tool',
+      version: '2.0.0',
+      dependencies: {
+        yargs: '^17.0.0' // unchanged
+      },
+      devDependencies: {
+        jest: '^30.3.0' // bumped
+      }
+    };
+
+    // Base package-lock.json -- ansi-regex at v5.0.1, hoisted at top level (shared between yargs and jest trees)
+    const basePackageLock = {
+      name: 'my-org-tool',
+      version: '2.0.0',
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        '': {
+          name: 'my-org-tool',
+          version: '2.0.0',
+          dependencies: { yargs: '^17.0.0' },
+          devDependencies: { jest: '^29.0.0' }
+        },
+        'node_modules/yargs': {
+          version: '17.7.2',
+          resolved: 'https://registry.npmjs.org/yargs/-/yargs-17.7.2.tgz',
+          dependencies: { cliui: '^8.0.1' }
+        },
+        'node_modules/cliui': {
+          version: '8.0.1',
+          resolved: 'https://registry.npmjs.org/cliui/-/cliui-8.0.1.tgz',
+          dependencies: { 'wrap-ansi': '^7.0.0', 'strip-ansi': '^6.0.1' }
+        },
+        'node_modules/wrap-ansi': {
+          version: '7.0.0',
+          resolved: 'https://registry.npmjs.org/wrap-ansi/-/wrap-ansi-7.0.0.tgz',
+          dependencies: { 'strip-ansi': '^6.0.0' }
+        },
+        'node_modules/strip-ansi': {
+          version: '6.0.1',
+          resolved: 'https://registry.npmjs.org/strip-ansi/-/strip-ansi-6.0.1.tgz',
+          dependencies: { 'ansi-regex': '^5.0.1' }
+        },
+        'node_modules/ansi-regex': {
+          version: '5.0.1',
+          resolved: 'https://registry.npmjs.org/ansi-regex/-/ansi-regex-5.0.1.tgz'
+          // No dev: true -- shared between yargs (prod) and jest (dev)
+        },
+        'node_modules/jest': {
+          version: '29.0.0',
+          resolved: 'https://registry.npmjs.org/jest/-/jest-29.0.0.tgz',
+          dev: true,
+          dependencies: { 'jest-cli': '^29.0.0' }
+        },
+        'node_modules/jest-cli': {
+          version: '29.0.0',
+          resolved: 'https://registry.npmjs.org/jest-cli/-/jest-cli-29.0.0.tgz',
+          dev: true,
+          dependencies: { yargs: '^17.0.0' }
+        }
+      }
+    };
+
+    // Head package-lock.json -- jest bumped to 30.3.0, npm reshuffled ansi-regex to 6.2.2
+    // (now hoisted, version changed, still no dev: true because shared with yargs prod tree)
+    const headPackageLock = {
+      name: 'my-org-tool',
+      version: '2.0.0',
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        '': {
+          name: 'my-org-tool',
+          version: '2.0.0',
+          dependencies: { yargs: '^17.0.0' },
+          devDependencies: { jest: '^30.3.0' }
+        },
+        'node_modules/yargs': {
+          version: '17.7.2',
+          resolved: 'https://registry.npmjs.org/yargs/-/yargs-17.7.2.tgz',
+          dependencies: { cliui: '^8.0.1' }
+        },
+        'node_modules/cliui': {
+          version: '8.0.1',
+          resolved: 'https://registry.npmjs.org/cliui/-/cliui-8.0.1.tgz',
+          dependencies: { 'wrap-ansi': '^7.0.0', 'strip-ansi': '^6.0.1' }
+        },
+        'node_modules/wrap-ansi': {
+          version: '7.0.0',
+          resolved: 'https://registry.npmjs.org/wrap-ansi/-/wrap-ansi-7.0.0.tgz',
+          dependencies: { 'strip-ansi': '^6.0.0' }
+        },
+        'node_modules/strip-ansi': {
+          version: '7.1.0', // version changed by reshuffling
+          resolved: 'https://registry.npmjs.org/strip-ansi/-/strip-ansi-7.1.0.tgz',
+          dependencies: { 'ansi-regex': '^6.0.0' }
+        },
+        'node_modules/ansi-regex': {
+          version: '6.2.2', // version changed by reshuffling
+          resolved: 'https://registry.npmjs.org/ansi-regex/-/ansi-regex-6.2.2.tgz'
+          // Still no dev: true -- shared between yargs (prod) and jest (dev)
+        },
+        'node_modules/jest': {
+          version: '30.3.0', // bumped
+          resolved: 'https://registry.npmjs.org/jest/-/jest-30.3.0.tgz',
+          dev: true,
+          dependencies: { 'jest-cli': '^30.3.0' }
+        },
+        'node_modules/jest-cli': {
+          version: '30.3.0', // bumped
+          resolved: 'https://registry.npmjs.org/jest-cli/-/jest-cli-30.3.0.tgz',
+          dev: true,
+          dependencies: { yargs: '^17.0.0' }
+        }
+      }
+    };
+
+    mockCore.getBooleanInput.mockImplementation(input => {
+      if (input === 'include-dev-dependencies') return false;
+      return false;
+    });
+
+    mockExec.exec.mockImplementation(
+      createExecMock(basePackageJson, headPackageJson, basePackageLock, headPackageLock)
+    );
+
+    const result = await hasPackageDependencyChanges();
+
+    // package.json shows only devDependencies changed, so the lockfile reshuffling
+    // of shared packages (without dev: true) should NOT be treated as production changes
+    expect(result).toEqual({ hasChanges: false, onlyDevDependencies: true });
+  });
+
+  test('should handle nested node_modules keys when walking the dependency tree', async () => {
+    const { hasPackageDependencyChanges } = indexModule;
+
+    // Tests resolveDepKey with nested node_modules paths. jest-cli has a nested
+    // copy of chalk (different version), which itself depends on strip-ansi.
+    // The hoisted strip-ansi (shared with yargs, no dev: true) gets reshuffled.
+    // The tree walk must: 1) find the nested chalk via jest-cli, 2) from nested
+    // chalk find strip-ansi (resolving up to top-level), marking it reachable.
+
+    const basePackageJson = {
+      name: 'my-tool',
+      version: '1.0.0',
+      dependencies: { yargs: '^17.0.0' },
+      devDependencies: { jest: '^29.0.0' }
+    };
+
+    const headPackageJson = {
+      name: 'my-tool',
+      version: '1.0.0',
+      dependencies: { yargs: '^17.0.0' },
+      devDependencies: { jest: '^30.3.0' }
+    };
+
+    const basePackageLock = {
+      name: 'my-tool',
+      version: '1.0.0',
+      lockfileVersion: 3,
+      packages: {
+        '': {
+          name: 'my-tool',
+          version: '1.0.0',
+          dependencies: { yargs: '^17.0.0' },
+          devDependencies: { jest: '^29.0.0' }
+        },
+        'node_modules/yargs': {
+          version: '17.7.2',
+          resolved: 'https://registry.npmjs.org/yargs/-/yargs-17.7.2.tgz',
+          dependencies: { 'strip-ansi': '^6.0.0' }
+        },
+        'node_modules/strip-ansi': {
+          version: '6.0.1',
+          resolved: 'https://registry.npmjs.org/strip-ansi/-/strip-ansi-6.0.1.tgz'
+          // No dev: true -- shared between yargs (prod) and jest (dev) trees
+        },
+        'node_modules/jest': {
+          version: '29.0.0',
+          resolved: 'https://registry.npmjs.org/jest/-/jest-29.0.0.tgz',
+          dev: true,
+          dependencies: { 'jest-cli': '^29.0.0' }
+        },
+        'node_modules/jest-cli': {
+          version: '29.0.0',
+          resolved: 'https://registry.npmjs.org/jest-cli/-/jest-cli-29.0.0.tgz',
+          dev: true,
+          dependencies: { chalk: '^4.0.0' }
+        },
+        // jest-cli has its own nested chalk (different major than any top-level chalk)
+        'node_modules/jest-cli/node_modules/chalk': {
+          version: '4.1.2',
+          resolved: 'https://registry.npmjs.org/chalk/-/chalk-4.1.2.tgz',
+          dev: true,
+          dependencies: { 'strip-ansi': '^6.0.0' }
+        }
+      }
+    };
+
+    // After jest bump: nested chalk updated, and the shared top-level strip-ansi
+    // got reshuffled (new patch version, lost dev: true because shared with yargs)
+    const headPackageLock = {
+      name: 'my-tool',
+      version: '1.0.0',
+      lockfileVersion: 3,
+      packages: {
+        '': {
+          name: 'my-tool',
+          version: '1.0.0',
+          dependencies: { yargs: '^17.0.0' },
+          devDependencies: { jest: '^30.3.0' }
+        },
+        'node_modules/yargs': {
+          version: '17.7.2',
+          resolved: 'https://registry.npmjs.org/yargs/-/yargs-17.7.2.tgz',
+          dependencies: { 'strip-ansi': '^6.0.0' }
+        },
+        'node_modules/strip-ansi': {
+          version: '6.0.2', // reshuffled, new patch, no dev: true (shared)
+          resolved: 'https://registry.npmjs.org/strip-ansi/-/strip-ansi-6.0.2.tgz'
+        },
+        'node_modules/jest': {
+          version: '30.3.0',
+          resolved: 'https://registry.npmjs.org/jest/-/jest-30.3.0.tgz',
+          dev: true,
+          dependencies: { 'jest-cli': '^30.3.0' }
+        },
+        'node_modules/jest-cli': {
+          version: '30.3.0',
+          resolved: 'https://registry.npmjs.org/jest-cli/-/jest-cli-30.3.0.tgz',
+          dev: true,
+          dependencies: { chalk: '^4.0.0' }
+        },
+        'node_modules/jest-cli/node_modules/chalk': {
+          version: '4.1.3', // nested, changed version
+          resolved: 'https://registry.npmjs.org/chalk/-/chalk-4.1.3.tgz',
+          dev: true,
+          dependencies: { 'strip-ansi': '^6.0.0' }
+        }
+      }
+    };
+
+    mockCore.getBooleanInput.mockImplementation(input => {
+      if (input === 'include-dev-dependencies') return false;
+      return false;
+    });
+
+    mockExec.exec.mockImplementation(
+      createExecMock(basePackageJson, headPackageJson, basePackageLock, headPackageLock)
+    );
+
+    const result = await hasPackageDependencyChanges();
+
+    // strip-ansi at top level (no dev: true, shared with yargs) changed version but
+    // is reachable via jest -> jest-cli -> nested chalk -> strip-ansi (resolving up
+    // to top-level via resolveDepKey). The nested chalk also changed but is dev: true.
+    // All changes should be attributed to the jest devDep update.
+    expect(result).toEqual({ hasChanges: false, onlyDevDependencies: true });
+  });
+
+  test('should attribute reshuffled packages nested under prod deps via package-name fallback', async () => {
+    const { hasPackageDependencyChanges } = indexModule;
+
+    // Reproduces the real-world scenario from organization-readme-badge-generator PR #74:
+    // A jest devDep bump causes npm to reshuffle ansi-regex. The changed copy lives at
+    // node_modules/cliui/node_modules/ansi-regex (nested under the production dep cliui).
+    // The exact-key tree walk from jest cannot reach this path because cliui is reached
+    // through the prod yargs chain, not the dev jest chain in this lockfile layout.
+    // The fallback checks that the package NAME "ansi-regex" appears elsewhere in the
+    // dev transitive set, confirming it's reshuffling rather than a new production dep.
+
+    const basePackageJson = {
+      name: 'my-org-tool',
+      version: '1.0.8',
+      dependencies: { yargs: '^17.0.0' },
+      devDependencies: { jest: '^29.0.0' }
+    };
+
+    const headPackageJson = {
+      name: 'my-org-tool',
+      version: '1.0.8',
+      dependencies: { yargs: '^17.0.0' },
+      devDependencies: { jest: '^30.3.0' }
+    };
+
+    const basePackageLock = {
+      name: 'my-org-tool',
+      version: '1.0.8',
+      lockfileVersion: 3,
+      packages: {
+        '': {
+          name: 'my-org-tool',
+          version: '1.0.8',
+          dependencies: { yargs: '^17.0.0' },
+          devDependencies: { jest: '^29.0.0' }
+        },
+        'node_modules/yargs': {
+          version: '17.7.2',
+          dependencies: { cliui: '^8.0.1' }
+        },
+        'node_modules/cliui': {
+          version: '8.0.1',
+          dependencies: { 'strip-ansi': '^6.0.1' }
+        },
+        'node_modules/cliui/node_modules/ansi-regex': {
+          version: '5.0.1'
+          // no dev: true - nested under prod dep cliui
+        },
+        'node_modules/cliui/node_modules/strip-ansi': {
+          version: '6.0.1',
+          dependencies: { 'ansi-regex': '^5.0.1' }
+        },
+        'node_modules/jest': {
+          version: '29.0.0',
+          dev: true,
+          dependencies: { 'jest-cli': '^29.0.0' }
+        },
+        'node_modules/jest-cli': {
+          version: '29.0.0',
+          dev: true,
+          dependencies: { chalk: '^4.0.0' }
+        },
+        'node_modules/jest-cli/node_modules/chalk': {
+          version: '4.1.2',
+          dev: true,
+          dependencies: { 'ansi-styles': '^4.0.0' }
+        },
+        // ansi-regex also exists as a transitive of jest (through a different path)
+        'node_modules/ansi-regex': {
+          version: '5.0.1',
+          dev: true
+        }
+      }
+    };
+
+    const headPackageLock = {
+      name: 'my-org-tool',
+      version: '1.0.8',
+      lockfileVersion: 3,
+      packages: {
+        '': {
+          name: 'my-org-tool',
+          version: '1.0.8',
+          dependencies: { yargs: '^17.0.0' },
+          devDependencies: { jest: '^30.3.0' }
+        },
+        'node_modules/yargs': {
+          version: '17.7.2',
+          dependencies: { cliui: '^8.0.1' }
+        },
+        'node_modules/cliui': {
+          version: '8.0.1',
+          dependencies: { 'strip-ansi': '^6.0.1' }
+        },
+        'node_modules/cliui/node_modules/ansi-regex': {
+          version: '5.0.2' // reshuffled - version changed but same package name
+          // no dev: true - nested under prod dep cliui
+        },
+        'node_modules/cliui/node_modules/strip-ansi': {
+          version: '6.0.1',
+          dependencies: { 'ansi-regex': '^5.0.1' }
+        },
+        'node_modules/jest': {
+          version: '30.3.0',
+          dev: true,
+          dependencies: { 'jest-cli': '^30.3.0' }
+        },
+        'node_modules/jest-cli': {
+          version: '30.3.0',
+          dev: true,
+          dependencies: { chalk: '^4.0.0' }
+        },
+        'node_modules/jest-cli/node_modules/chalk': {
+          version: '4.1.2',
+          dev: true,
+          dependencies: { 'ansi-styles': '^4.0.0', 'strip-ansi': '^6.0.0' }
+        },
+        // jest-cli/chalk now depends on strip-ansi which depends on ansi-regex
+        'node_modules/jest-cli/node_modules/strip-ansi': {
+          version: '6.0.1',
+          dev: true,
+          dependencies: { 'ansi-regex': '^5.0.1' }
+        },
+        'node_modules/jest-cli/node_modules/ansi-regex': {
+          version: '5.0.2',
+          dev: true
+        },
+        'node_modules/ansi-regex': {
+          version: '5.0.2',
+          dev: true
+        }
+      }
+    };
+
+    mockCore.getBooleanInput.mockImplementation(input => {
+      if (input === 'include-dev-dependencies') return false;
+      return false;
+    });
+
+    mockExec.exec.mockImplementation(
+      createExecMock(basePackageJson, headPackageJson, basePackageLock, headPackageLock)
+    );
+
+    const result = await hasPackageDependencyChanges();
+
+    // node_modules/cliui/node_modules/ansi-regex changed and has no dev: true,
+    // but the package name "ansi-regex" also changed at a confirmed dev path
+    // (node_modules/ansi-regex has dev: true and changed version), so the
+    // tightened name-based fallback correctly identifies this as reshuffling.
+    expect(result).toEqual({ hasChanges: false, onlyDevDependencies: true });
+  });
+
+  test('should detect prod transitive changes even when package.json shows only devDependency changes', async () => {
+    const { hasPackageDependencyChanges } = indexModule;
+
+    // This reproduces the combined scenario: devDep bump + intentional prod transitive
+    // update (e.g., fixing a vulnerability in undici) in the same PR. The tree walking
+    // should correctly identify that undici is NOT a transitive of the changed devDep,
+    // while @octokit/core IS (and is just reshuffling).
+
+    const basePackageJson = {
+      name: 'my-org-tool',
+      version: '2.0.0',
+      dependencies: {
+        '@octokit/rest': '^20.0.0'
+      },
+      devDependencies: {
+        '@octokit/webhooks-types': '^7.1.0'
+      }
+    };
+
+    // Head package.json - ONLY devDependencies updated
+    const headPackageJson = {
+      name: 'my-org-tool',
+      version: '2.0.0',
+      dependencies: {
+        '@octokit/rest': '^20.0.0'
+      },
+      devDependencies: {
+        '@octokit/webhooks-types': '^7.6.0'
+      }
+    };
+
+    const basePackageLock = {
+      name: 'my-org-tool',
+      version: '2.0.0',
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        '': {
+          name: 'my-org-tool',
+          version: '2.0.0',
+          dependencies: { '@octokit/rest': '^20.0.0' },
+          devDependencies: { '@octokit/webhooks-types': '^7.1.0' }
+        },
+        'node_modules/@octokit/rest': {
+          version: '20.0.2',
+          resolved: 'https://registry.npmjs.org/@octokit/rest/-/rest-20.0.2.tgz',
+          dependencies: {
+            '@octokit/core': '^5.0.0',
+            undici: '^6.0.0'
+          }
+        },
+        'node_modules/@octokit/core': {
+          version: '5.0.0',
+          resolved: 'https://registry.npmjs.org/@octokit/core/-/core-5.0.0.tgz'
+        },
+        'node_modules/@octokit/webhooks-types': {
+          version: '7.1.0',
+          resolved: 'https://registry.npmjs.org/@octokit/webhooks-types/-/webhooks-types-7.1.0.tgz',
+          dev: true,
+          dependencies: {
+            '@octokit/core': '^5.0.0'
+          }
+        },
+        'node_modules/undici': {
+          version: '6.19.0',
+          resolved: 'https://registry.npmjs.org/undici/-/undici-6.19.0.tgz'
+        }
+      }
+    };
+
+    // Head lockfile: webhooks-types bumped (dev), @octokit/core reshuffled (shared),
+    // and undici intentionally bumped for a vulnerability fix (prod transitive)
+    const headPackageLock = {
+      name: 'my-org-tool',
+      version: '2.0.0',
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        '': {
+          name: 'my-org-tool',
+          version: '2.0.0',
+          dependencies: { '@octokit/rest': '^20.0.0' },
+          devDependencies: { '@octokit/webhooks-types': '^7.6.0' }
+        },
+        'node_modules/@octokit/rest': {
+          version: '20.0.2',
+          resolved: 'https://registry.npmjs.org/@octokit/rest/-/rest-20.0.2.tgz',
+          dependencies: {
+            '@octokit/core': '^5.0.0',
+            undici: '^6.0.0'
+          }
+        },
+        'node_modules/@octokit/core': {
+          version: '5.2.0', // reshuffled - transitive of changed devDep
+          resolved: 'https://registry.npmjs.org/@octokit/core/-/core-5.2.0.tgz'
+        },
+        'node_modules/@octokit/webhooks-types': {
+          version: '7.6.0',
+          resolved: 'https://registry.npmjs.org/@octokit/webhooks-types/-/webhooks-types-7.6.0.tgz',
+          dev: true,
+          dependencies: {
+            '@octokit/core': '^5.0.0'
+          }
+        },
+        'node_modules/undici': {
+          version: '6.21.0', // intentional prod transitive bump (vuln fix)
+          resolved: 'https://registry.npmjs.org/undici/-/undici-6.21.0.tgz'
+        }
+      }
+    };
+
+    mockCore.getBooleanInput.mockImplementation(input => {
+      if (input === 'include-dev-dependencies') return false;
+      return false;
+    });
+
+    mockExec.exec.mockImplementation(
+      createExecMock(basePackageJson, headPackageJson, basePackageLock, headPackageLock)
+    );
+
+    const result = await hasPackageDependencyChanges();
+
+    // undici is NOT a transitive of @octokit/webhooks-types, so it's a genuine
+    // production change that should be flagged even though package.json only shows devDep changes
+    expect(result).toEqual({ hasChanges: true, onlyDevDependencies: false });
+  });
+
+  test('should still detect production changes when both package.json prod deps and lockfile change', async () => {
+    const { hasPackageDependencyChanges } = indexModule;
+
+    // This ensures the fix does not create a false negative when package.json actually
+    // has production dependency changes alongside lockfile reshuffling.
+
+    const basePackageJson = {
+      name: 'my-tool',
+      version: '1.0.0',
+      dependencies: {
+        '@octokit/rest': '^19.0.0'
+      },
+      devDependencies: {
+        jest: '^29.0.0'
+      }
+    };
+
+    const headPackageJson = {
+      name: 'my-tool',
+      version: '1.0.0',
+      dependencies: {
+        '@octokit/rest': '^20.0.0' // production dep changed
+      },
+      devDependencies: {
+        jest: '^29.7.0' // dev dep also changed
+      }
+    };
+
+    const basePackageLock = {
+      name: 'my-tool',
+      version: '1.0.0',
+      lockfileVersion: 3,
+      packages: {
+        '': {
+          name: 'my-tool',
+          version: '1.0.0',
+          dependencies: { '@octokit/rest': '^19.0.0' },
+          devDependencies: { jest: '^29.0.0' }
+        },
+        'node_modules/@octokit/rest': {
+          version: '19.0.13',
+          resolved: 'https://registry.npmjs.org/@octokit/rest/-/rest-19.0.13.tgz'
+        },
+        'node_modules/@octokit/core': {
+          version: '4.0.0',
+          resolved: 'https://registry.npmjs.org/@octokit/core/-/core-4.0.0.tgz'
+        },
+        'node_modules/jest': {
+          version: '29.0.0',
+          resolved: 'https://registry.npmjs.org/jest/-/jest-29.0.0.tgz',
+          dev: true
+        }
+      }
+    };
+
+    const headPackageLock = {
+      name: 'my-tool',
+      version: '1.0.0',
+      lockfileVersion: 3,
+      packages: {
+        '': {
+          name: 'my-tool',
+          version: '1.0.0',
+          dependencies: { '@octokit/rest': '^20.0.0' },
+          devDependencies: { jest: '^29.7.0' }
+        },
+        'node_modules/@octokit/rest': {
+          version: '20.0.2',
+          resolved: 'https://registry.npmjs.org/@octokit/rest/-/rest-20.0.2.tgz'
+        },
+        'node_modules/@octokit/core': {
+          version: '5.2.0',
+          resolved: 'https://registry.npmjs.org/@octokit/core/-/core-5.2.0.tgz'
+        },
+        'node_modules/jest': {
+          version: '29.7.0',
+          resolved: 'https://registry.npmjs.org/jest/-/jest-29.7.0.tgz',
+          dev: true
+        }
+      }
+    };
+
+    mockCore.getBooleanInput.mockImplementation(input => {
+      if (input === 'include-dev-dependencies') return false;
+      return false;
+    });
+
+    mockExec.exec.mockImplementation(
+      createExecMock(basePackageJson, headPackageJson, basePackageLock, headPackageLock)
+    );
+
+    const result = await hasPackageDependencyChanges();
+
+    // package.json shows production dependency change, so lockfile changes are real
+    expect(result).toEqual({ hasChanges: true, onlyDevDependencies: false });
+  });
+
   test('should return onlyDevDependencies=true when package-lock.json has only devDependency changes (npm v7+ format)', async () => {
     const { hasPackageDependencyChanges } = indexModule;
 
@@ -1944,7 +3070,7 @@ describe('npm Version Check Action - Integration Tests', () => {
 
       const commits = await getCommitsWithMessages(null);
       expect(commits).toEqual([]);
-      expect(mockCore.warning).toHaveBeenCalledWith('⚠️  No token provided, cannot fetch PR commits via API');
+      expect(mockCore.warning).toHaveBeenCalledWith('⚠️ No token provided, cannot fetch PR commits via API');
     });
 
     test('should return empty array when PR number is missing', async () => {
@@ -1954,7 +3080,7 @@ describe('npm Version Check Action - Integration Tests', () => {
 
       const commits = await getCommitsWithMessages('test-token');
       expect(commits).toEqual([]);
-      expect(mockCore.warning).toHaveBeenCalledWith('⚠️  Could not determine PR number');
+      expect(mockCore.warning).toHaveBeenCalledWith('⚠️ Could not determine PR number');
     });
 
     test('should return empty array when API call fails', async () => {
@@ -1964,7 +3090,7 @@ describe('npm Version Check Action - Integration Tests', () => {
 
       const commits = await getCommitsWithMessages('test-token');
       expect(commits).toEqual([]);
-      expect(mockCore.warning).toHaveBeenCalledWith('⚠️  Could not fetch PR commits via API: API rate limit exceeded');
+      expect(mockCore.warning).toHaveBeenCalledWith('⚠️ Could not fetch PR commits via API: API rate limit exceeded');
     });
   });
 
@@ -2021,7 +3147,7 @@ describe('npm Version Check Action - Integration Tests', () => {
         'test-repo'
       );
       expect(files).toEqual([]);
-      expect(mockCore.warning).toHaveBeenCalledWith('⚠️  Could not fetch files for commit abc1234: Not found');
+      expect(mockCore.warning).toHaveBeenCalledWith('⚠️ Could not fetch files for commit abc1234: Not found');
     });
   });
 
@@ -2535,8 +3661,369 @@ describe('npm Version Check Action - Integration Tests', () => {
       expect(mockCore.info).toHaveBeenCalledWith('🏁 Version check completed successfully');
     });
 
+    test('should fail when runtime changes but version bump is not major', async () => {
+      const { run } = indexModule;
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({ name: 'test', version: '1.1.0' }));
+
+      // Mock API responses for commits
+      mockOctokit.paginate.mockResolvedValue([
+        { sha: 'abc1234567890abcdef1234567890abcdef1234', commit: { message: 'Upgrade runtime' } }
+      ]);
+
+      mockOctokit.rest.repos.getCommit.mockResolvedValue({
+        data: { files: [{ filename: 'src/index.js' }] }
+      });
+
+      const baseActionYml = `name: 'my-action'\nruns:\n  using: 'node20'\n  main: 'dist/index.js'\n`;
+      const headActionYml = `name: 'my-action'\nruns:\n  using: 'node24'\n  main: 'dist/index.js'\n`;
+
+      mockExec.exec.mockImplementation(async (command, args, options) => {
+        if (args.includes('tag')) {
+          options.listeners.stdout('v1.0.0');
+        } else if (args.includes('show') && args[1] === `${TEST_BASE_SHA}:action.yml`) {
+          options.listeners.stdout(Buffer.from(baseActionYml));
+        } else if (args.includes('show') && args[1] === `${TEST_HEAD_SHA}:action.yml`) {
+          options.listeners.stdout(Buffer.from(headActionYml));
+        } else if (args.includes('show') && args[1]?.includes('package.json')) {
+          options.listeners.stdout('{ "name": "test", "version": "1.0.0" }');
+        }
+        return 0;
+      });
+
+      mockSemver.compare.mockReturnValue(1); // Higher version (but only minor bump)
+
+      await run();
+
+      expect(mockCore.setFailed).toHaveBeenCalledWith(
+        expect.stringContaining('action.yml Node.js Actions runtime changed from node20 to node24')
+      );
+      expect(mockCore.setFailed).toHaveBeenCalledWith(expect.stringContaining('requires a MAJOR version bump'));
+      expect(mockCore.notice).toHaveBeenCalledWith(expect.stringContaining(`Run 'npm version major'`));
+    });
+
+    test('should pass when runtime changes with major version bump', async () => {
+      const { run } = indexModule;
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({ name: 'test', version: '2.0.0' }));
+
+      // Mock API responses for commits
+      mockOctokit.paginate.mockResolvedValue([
+        { sha: 'abc1234567890abcdef1234567890abcdef1234', commit: { message: 'Upgrade runtime' } }
+      ]);
+
+      mockOctokit.rest.repos.getCommit.mockResolvedValue({
+        data: { files: [{ filename: 'src/index.js' }] }
+      });
+
+      const baseActionYml = `name: 'my-action'\nruns:\n  using: 'node20'\n  main: 'dist/index.js'\n`;
+      const headActionYml = `name: 'my-action'\nruns:\n  using: 'node24'\n  main: 'dist/index.js'\n`;
+
+      mockExec.exec.mockImplementation(async (command, args, options) => {
+        if (args.includes('tag')) {
+          options.listeners.stdout('v1.0.0');
+        } else if (args.includes('show') && args[1] === `${TEST_BASE_SHA}:action.yml`) {
+          options.listeners.stdout(Buffer.from(baseActionYml));
+        } else if (args.includes('show') && args[1] === `${TEST_HEAD_SHA}:action.yml`) {
+          options.listeners.stdout(Buffer.from(headActionYml));
+        } else if (args.includes('show') && args[1]?.includes('package.json')) {
+          options.listeners.stdout('{ "name": "test", "version": "1.0.0" }');
+        }
+        return 0;
+      });
+
+      mockSemver.compare.mockReturnValue(1); // Higher version (major bump)
+
+      await run();
+
+      expect(mockCore.info).toHaveBeenCalledWith(
+        '✅ Major version bump detected for Node.js Actions runtime change (node20 -> node24)'
+      );
+      expect(mockCore.setOutput).toHaveBeenCalledWith('runtime-changed', 'true');
+      expect(mockCore.info).toHaveBeenCalledWith('🏁 Version check completed successfully');
+    });
+
+    test('should skip runtime check when skip-major-on-actions-runtime-change is true', async () => {
+      const { run } = indexModule;
+
+      mockCore.getInput.mockImplementation(input => {
+        switch (input) {
+          case 'package-path':
+            return 'package.json';
+          case 'tag-prefix':
+            return 'v';
+          case 'skip-files-check':
+            return 'true';
+          case 'skip-major-on-actions-runtime-change':
+            return 'true';
+          case 'token':
+            return 'test-token';
+          case 'skip-version-keyword':
+            return '[skip version]';
+          default:
+            return '';
+        }
+      });
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({ name: 'test', version: '1.1.0' }));
+
+      mockExec.exec.mockImplementation(async (command, args, options) => {
+        if (args.includes('tag')) {
+          options.listeners.stdout('v1.0.0');
+        }
+        return 0;
+      });
+
+      mockSemver.compare.mockReturnValue(1); // Higher version
+
+      await run();
+
+      // Should not mention runtime checks at all
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.info).toHaveBeenCalledWith('🏁 Version check completed successfully');
+    });
+
+    test('should not check runtime when no action.yml exists (non-Actions repo)', async () => {
+      const { run } = indexModule;
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({ name: 'test', version: '1.1.0' }));
+
+      // Mock API responses for commits
+      mockOctokit.paginate.mockResolvedValue([
+        { sha: 'abc1234567890abcdef1234567890abcdef1234', commit: { message: 'Add feature' } }
+      ]);
+
+      mockOctokit.rest.repos.getCommit.mockResolvedValue({
+        data: { files: [{ filename: 'src/index.js' }] }
+      });
+
+      mockExec.exec.mockImplementation(async (command, args, options) => {
+        if (args.includes('tag')) {
+          options.listeners.stdout('v1.0.0');
+        } else if (args.includes('show') && args[1]?.includes('action.yml')) {
+          throw new Error('File not found');
+        } else if (args.includes('show') && args[1]?.includes('package.json')) {
+          options.listeners.stdout('{ "name": "test", "version": "1.0.0" }');
+        }
+        return 0;
+      });
+
+      mockSemver.compare.mockReturnValue(1);
+
+      await run();
+
+      // Should pass without any runtime-related failure
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.setOutput).toHaveBeenCalledWith('runtime-changed', 'false');
+      expect(mockCore.info).toHaveBeenCalledWith('🏁 Version check completed successfully');
+    });
+
+    test('should set runtime-changed output to false when runtime does not change', async () => {
+      const { run } = indexModule;
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({ name: 'test', version: '1.1.0' }));
+
+      mockOctokit.paginate.mockResolvedValue([
+        { sha: 'abc1234567890abcdef1234567890abcdef1234', commit: { message: 'Add feature' } }
+      ]);
+
+      mockOctokit.rest.repos.getCommit.mockResolvedValue({
+        data: { files: [{ filename: 'src/index.js' }] }
+      });
+
+      const actionYml = `name: 'my-action'\nruns:\n  using: 'node20'\n  main: 'dist/index.js'\n`;
+
+      mockExec.exec.mockImplementation(async (command, args, options) => {
+        if (args.includes('tag')) {
+          options.listeners.stdout('v1.0.0');
+        } else if (args.includes('show') && args[1]?.includes('action.yml')) {
+          options.listeners.stdout(Buffer.from(actionYml));
+        } else if (args.includes('show') && args[1]?.includes('package.json')) {
+          options.listeners.stdout('{ "name": "test", "version": "1.0.0" }');
+        }
+        return 0;
+      });
+
+      mockSemver.compare.mockReturnValue(1);
+
+      await run();
+
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+      expect(mockCore.setOutput).toHaveBeenCalledWith('runtime-changed', 'false');
+    });
+
+    test('should handle runtime detection failure gracefully without crashing', async () => {
+      const { run } = indexModule;
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({ name: 'test', version: '1.1.0' }));
+
+      mockOctokit.paginate.mockResolvedValue([
+        { sha: 'abc1234567890abcdef1234567890abcdef1234', commit: { message: 'Add feature' } }
+      ]);
+
+      mockOctokit.rest.repos.getCommit.mockResolvedValue({
+        data: { files: [{ filename: 'src/index.js' }] }
+      });
+
+      // Make action.yml retrieval fail with an unexpected error on both refs
+      mockExec.exec.mockImplementation(async (command, args, options) => {
+        if (args.includes('tag')) {
+          options.listeners.stdout('v1.0.0');
+        } else if (args.includes('show') && args[1]?.includes('action.yml')) {
+          throw new Error('Unexpected git error');
+        } else if (args.includes('show') && args[1]?.includes('package.json')) {
+          options.listeners.stdout('{ "name": "test", "version": "1.0.0" }');
+        }
+        return 0;
+      });
+
+      mockSemver.compare.mockReturnValue(1);
+
+      await run();
+
+      // Should still complete successfully since action.yml not found = no runtime change
+      expect(mockCore.setOutput).toHaveBeenCalledWith('runtime-changed', 'false');
+      expect(mockCore.info).toHaveBeenCalledWith('🏁 Version check completed successfully');
+    });
+
+    test('should proceed with version check when only action.yml changed and runtime check is enabled', async () => {
+      const { run } = indexModule;
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({ name: 'test', version: '1.1.0' }));
+
+      // Only action.yml changed - no JS/TS or package dependency changes
+      mockOctokit.paginate.mockResolvedValue([
+        { sha: 'abc1234567890abcdef1234567890abcdef1234', commit: { message: 'Upgrade runtime' } }
+      ]);
+
+      mockOctokit.rest.repos.getCommit.mockResolvedValue({
+        data: { files: [{ filename: 'action.yml' }] }
+      });
+
+      const baseActionYml = `name: 'my-action'\nruns:\n  using: 'node20'\n  main: 'dist/index.js'\n`;
+      const headActionYml = `name: 'my-action'\nruns:\n  using: 'node24'\n  main: 'dist/index.js'\n`;
+
+      mockExec.exec.mockImplementation(async (command, args, options) => {
+        if (args.includes('tag')) {
+          options.listeners.stdout('v1.0.0');
+        } else if (args.includes('show') && args[1] === `${TEST_BASE_SHA}:action.yml`) {
+          options.listeners.stdout(Buffer.from(baseActionYml));
+        } else if (args.includes('show') && args[1] === `${TEST_HEAD_SHA}:action.yml`) {
+          options.listeners.stdout(Buffer.from(headActionYml));
+        } else if (args.includes('show') && args[1]?.includes('package.json')) {
+          options.listeners.stdout('{ "name": "test", "version": "1.0.0" }');
+        }
+        return 0;
+      });
+
+      mockSemver.compare.mockReturnValue(1); // Higher version (but only minor bump)
+
+      await run();
+
+      // Should NOT skip the check - action.yml runtime change should trigger version check
+      expect(mockCore.info).toHaveBeenCalledWith(
+        '✅ action.yml Node.js Actions runtime change detected, proceeding with version check...'
+      );
+      // Should fail because runtime changed but no major version bump
+      expect(mockCore.setFailed).toHaveBeenCalledWith(
+        expect.stringContaining('action.yml Node.js Actions runtime changed from node20 to node24')
+      );
+    });
+
+    test('should skip when only action.yml changed but runtime check is disabled', async () => {
+      const { run } = indexModule;
+
+      mockCore.getInput.mockImplementation(input => {
+        switch (input) {
+          case 'package-path':
+            return 'package.json';
+          case 'tag-prefix':
+            return 'v';
+          case 'skip-files-check':
+            return 'false';
+          case 'skip-major-on-actions-runtime-change':
+            return 'true';
+          case 'token':
+            return 'test-token';
+          case 'skip-version-keyword':
+            return '[skip version]';
+          default:
+            return '';
+        }
+      });
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({ name: 'test', version: '1.1.0' }));
+
+      // Only action.yml changed
+      mockOctokit.paginate.mockResolvedValue([
+        { sha: 'abc1234567890abcdef1234567890abcdef1234', commit: { message: 'Upgrade runtime' } }
+      ]);
+
+      mockOctokit.rest.repos.getCommit.mockResolvedValue({
+        data: { files: [{ filename: 'action.yml' }] }
+      });
+
+      mockExec.exec.mockImplementation(async (command, args, options) => {
+        if (args.includes('show') && args[1]?.includes('package.json')) {
+          options.listeners.stdout('{ "name": "test", "version": "1.0.0" }');
+        }
+        return 0;
+      });
+
+      await run();
+
+      // Should skip since runtime check is disabled and no other relevant files changed
+      expect(mockCore.notice).toHaveBeenCalledWith(
+        '⏭️ No JavaScript/TypeScript files or dependency changes detected, skipping version check'
+      );
+    });
+
+    test('should skip when only action.yml metadata changed without runtime change', async () => {
+      const { run } = indexModule;
+
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({ name: 'test', version: '1.1.0' }));
+
+      // Only action.yml changed but runtime is the same
+      mockOctokit.paginate.mockResolvedValue([
+        { sha: 'abc1234567890abcdef1234567890abcdef1234', commit: { message: 'Update description' } }
+      ]);
+
+      mockOctokit.rest.repos.getCommit.mockResolvedValue({
+        data: { files: [{ filename: 'action.yml' }] }
+      });
+
+      const actionYml = `name: 'my-action'\nruns:\n  using: 'node20'\n  main: 'dist/index.js'\n`;
+
+      mockExec.exec.mockImplementation(async (command, args, options) => {
+        if (args.includes('show') && args[1]?.includes('action.yml')) {
+          options.listeners.stdout(Buffer.from(actionYml));
+        } else if (args.includes('show') && args[1]?.includes('package.json')) {
+          options.listeners.stdout('{ "name": "test", "version": "1.0.0" }');
+        }
+        return 0;
+      });
+
+      await run();
+
+      // Should skip since runtime didn't actually change
+      expect(mockCore.notice).toHaveBeenCalledWith(
+        '⏭️ No JavaScript/TypeScript files or dependency changes detected, skipping version check'
+      );
+      expect(mockCore.setFailed).not.toHaveBeenCalled();
+    });
+
     test('should handle general error in run function', async () => {
       const { run } = indexModule;
+
+      // Skip files check so we proceed directly to getLatestVersionTag which will throw
+      mockCore.getInput.mockImplementation(input => {
+        switch (input) {
+          case 'skip-files-check':
+            return 'true';
+          default:
+            return '';
+        }
+      });
 
       // Mock fetchTags to throw an error that propagates up
       mockExec.exec.mockRejectedValue(new Error('Git command failed'));
@@ -2623,10 +4110,113 @@ describe('npm Version Check Action - Integration Tests', () => {
       await run();
 
       // Should log that all commits were skipped
-      expect(mockCore.notice).toHaveBeenCalledWith('⏭️  Skipped 2 of 2 commits containing "[skip version]"');
+      expect(mockCore.notice).toHaveBeenCalledWith('⏭️ Skipped 2 of 2 commits containing "[skip version]"');
       // When all files are skipped, changedFiles is empty so no relevant changes detected
-      expect(mockCore.warning).toHaveBeenCalledWith(
-        '⏭️  No JavaScript/TypeScript files or dependency changes detected, skipping version check'
+      expect(mockCore.notice).toHaveBeenCalledWith(
+        '⏭️ No JavaScript/TypeScript files or dependency changes detected, skipping version check'
+      );
+    });
+
+    test('should skip version consistency check when skip-version-consistency-check is true', async () => {
+      const { run } = indexModule;
+
+      // Override to return true for skip-version-consistency-check
+      mockCore.getInput.mockImplementation(input => {
+        switch (input) {
+          case 'package-path':
+            return 'package.json';
+          case 'tag-prefix':
+            return 'v';
+          case 'skip-files-check':
+            return 'true'; // Skip files check to simplify test
+          case 'skip-version-consistency-check':
+            return 'true'; // Skip consistency check
+          case 'token':
+            return 'test-token';
+          case 'skip-version-keyword':
+            return '[skip version]';
+          default:
+            return '';
+        }
+      });
+
+      // Mock package.json and package-lock.json with DIFFERENT versions
+      // If the check was running, this would fail
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockImplementation(filePath => {
+        if (filePath === 'package.json') {
+          return JSON.stringify({ name: 'test', version: '1.1.0' });
+        }
+        if (filePath === 'package-lock.json') {
+          return JSON.stringify({ name: 'test', version: '1.0.0', lockfileVersion: 3 }); // Different version!
+        }
+        return '{}';
+      });
+
+      mockExec.exec.mockImplementation(async (command, args, options) => {
+        if (args.includes('tag')) {
+          options.listeners.stdout('v1.0.0');
+        }
+        return 0;
+      });
+
+      mockSemver.compare.mockReturnValue(1); // Higher version
+
+      await run();
+
+      // Should log that consistency check was skipped
+      expect(mockCore.info).toHaveBeenCalledWith(
+        '⏭️ Skipping version consistency check (skip-version-consistency-check: true)'
+      );
+      // Should NOT fail due to version mismatch
+      expect(mockCore.setFailed).not.toHaveBeenCalledWith(expect.stringContaining('Version mismatch'));
+      // Should complete successfully
+      expect(mockCore.info).toHaveBeenCalledWith('🏁 Version check completed successfully');
+    });
+
+    test('should fail when package.json and package-lock.json versions do not match', async () => {
+      const { run } = indexModule;
+
+      // Default config (consistency check enabled)
+      mockCore.getInput.mockImplementation(input => {
+        switch (input) {
+          case 'package-path':
+            return 'package.json';
+          case 'tag-prefix':
+            return 'v';
+          case 'skip-files-check':
+            return 'true'; // Skip files check to simplify test
+          case 'skip-version-consistency-check':
+            return 'false'; // Consistency check enabled (default)
+          case 'token':
+            return 'test-token';
+          case 'skip-version-keyword':
+            return '[skip version]';
+          default:
+            return '';
+        }
+      });
+
+      // Mock package.json and package-lock.json with DIFFERENT versions
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockImplementation(filePath => {
+        if (filePath === 'package.json') {
+          return JSON.stringify({ name: 'test', version: '1.1.0' });
+        }
+        if (filePath === 'package-lock.json') {
+          return JSON.stringify({ name: 'test', version: '1.0.0', lockfileVersion: 3 }); // Different version!
+        }
+        return '{}';
+      });
+
+      mockExec.exec.mockResolvedValue(0);
+
+      await run();
+
+      // Should fail due to version mismatch
+      expect(mockCore.setFailed).toHaveBeenCalledWith(expect.stringContaining('Version mismatch'));
+      expect(mockCore.notice).toHaveBeenCalledWith(
+        `💡 HINT: Run 'npm install' to regenerate package-lock.json with the correct version`
       );
     });
   });

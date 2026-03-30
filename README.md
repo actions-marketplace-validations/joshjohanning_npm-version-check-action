@@ -10,10 +10,15 @@
 
 This action prevents developers from forgetting to bump package.json version before merging PRs that contain code changes, which would cause publishing issues later.
 
+## What's new
+
+Please refer to the [release page](https://github.com/joshjohanning/npm-version-check-action/releases) for the latest release notes.
+
 ## ✨ Features
 
 - 🎯 **Smart file detection** - Only runs when JavaScript/TypeScript/package files are modified
 - 🧠 **Intelligent dependency checking** - Distinguishes between actual dependency changes vs metadata-only changes in package.json and package-lock.json
+- 🔒 **Version consistency check** - Validates that package.json and package-lock.json have matching versions
 - 🔧 **Configurable devDependencies handling** - Choose whether devDependency changes should trigger version bumps
 - ⏭️ **Per-commit skip support** - Use `[skip version]` in commit messages to exclude specific commits from version checking
 - 📊 **Semantic versioning validation** - Ensures new version is higher than previous release
@@ -21,6 +26,7 @@ This action prevents developers from forgetting to bump package.json version bef
 - 🚀 **Shallow clone compatible** - Automatically fetches tags, works with default checkout
 - 🎉 **First release support** - Gracefully handles repositories with no previous tags
 - 🚀 **JavaScript action** - Fast execution with Node.js runtime
+- 🔄 **Node.js Actions runtime change detection** - Requires a major version bump when `action.yml` changes its Node.js Actions runtime (e.g., `node20` to `node24`)
 - 📝 **Clear messaging** - Provides detailed success/error messages with emojis
 - ⚙️ **Configurable** - Supports custom package.json paths, tag prefixes, and dependency policies
 
@@ -29,6 +35,7 @@ This action prevents developers from forgetting to bump package.json version bef
 - Node.js project with `package.json`
 - Git tags following semantic versioning (e.g., `v1.0.0`, `v2.1.3`)
 - Used in pull request workflows
+- **Permissions**: `contents: read` and `pull-requests: read` (the action uses the Pulls API to analyze commits)
 
 ## 🚀 Usage
 
@@ -45,21 +52,37 @@ on:
 jobs:
   version-check:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
-      - uses: joshjohanning/npm-version-check-action@v1
+      - uses: joshjohanning/npm-version-check-action@v2
 ```
+
+> **Note:** The `pull-requests: read` permission is required because the action
+> uses the GitHub Pulls API to retrieve commits from the pull request for
+> per-commit file analysis and `[skip version]` keyword support.
 
 ### Advanced Configuration
 
 ```yaml
-- uses: joshjohanning/npm-version-check-action@v1
-  with:
-    package-path: 'packages/core/package.json' # Custom package.json path
-    tag-prefix: 'v' # Tag prefix (default: 'v')
-    skip-files-check: 'false' # Always run, don't check files
-    include-dev-dependencies: 'true' # Require version bump for devDependencies
+jobs:
+  version-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: joshjohanning/npm-version-check-action@v2
+        with:
+          package-path: 'packages/core/package.json' # Custom package.json path
+          tag-prefix: 'v' # Tag prefix (default: 'v')
+          skip-files-check: 'false' # Always run, don't check files
+          include-dev-dependencies: 'true' # Require version bump for devDependencies
 ```
 
 ### Complete Workflow Example
@@ -81,18 +104,18 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Check version increment
-        uses: joshjohanning/npm-version-check-action@v1
+        uses: joshjohanning/npm-version-check-action@v2
         with:
           package-path: 'package.json'
           tag-prefix: 'v'
 
       - name: Setup Node.js
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'npm'
 
       - name: Install dependencies
@@ -104,29 +127,32 @@ jobs:
 
 ## 📥 Inputs
 
-| Input                      | Description                                                                                      | Required | Default               |
-| -------------------------- | ------------------------------------------------------------------------------------------------ | -------- | --------------------- |
-| `package-path`             | Path to package.json file (relative to repository root)                                          | No       | `package.json`        |
-| `tag-prefix`               | Prefix for version tags (e.g., "v" for v1.0.0)                                                   | No       | `v`                   |
-| `skip-files-check`         | Skip checking if JS/package files changed (always run version check)                             | No       | `false`               |
-| `include-dev-dependencies` | Whether devDependency changes should trigger version bump requirement                            | No       | `false`               |
-| `skip-version-keyword`     | Keyword in commit messages to skip version check for that commit's files. Set to `''` to disable | No       | `[skip version]`      |
-| `token`                    | GitHub token for API access (required for `skip-version-keyword` to analyze commits)             | No       | `${{ github.token }}` |
+| Input                                  | Description                                                                                             | Required | Default               |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------- | -------- | --------------------- |
+| `package-path`                         | Path to package.json file (relative to repository root)                                                 | No       | `package.json`        |
+| `tag-prefix`                           | Prefix for version tags (e.g., "v" for v1.0.0)                                                          | No       | `v`                   |
+| `skip-files-check`                     | Skip checking if JS/package files changed (always run version check)                                    | No       | `false`               |
+| `include-dev-dependencies`             | Whether devDependency changes should trigger version bump requirement                                   | No       | `false`               |
+| `skip-version-keyword`                 | Keyword in commit messages to skip version check for that commit's files. Set to `''` to disable        | No       | `[skip version]`      |
+| `skip-version-consistency-check`       | Skip the check that validates package.json and package-lock.json have matching versions                 | No       | `false`               |
+| `skip-major-on-actions-runtime-change` | Skip the check that requires a major version bump when `action.yml` changes its Node.js Actions runtime | No       | `false`               |
+| `token`                                | GitHub token for API access (required for `skip-version-keyword` to analyze commits)                    | No       | `${{ github.token }}` |
 
 ## 📤 Outputs
 
-| Output             | Description                                      |
-| ------------------ | ------------------------------------------------ |
-| `version-changed`  | Whether the version was changed (`true`/`false`) |
-| `current-version`  | Current version from package.json                |
-| `previous-version` | Previous version from latest git tag             |
+| Output             | Description                                                                        |
+| ------------------ | ---------------------------------------------------------------------------------- |
+| `version-changed`  | Whether the version was changed (`true`/`false`)                                   |
+| `current-version`  | Current version from package.json                                                  |
+| `previous-version` | Previous version from latest git tag                                               |
+| `runtime-changed`  | Whether the Node.js Actions runtime version in action.yml changed (`true`/`false`) |
 
 ### Using Outputs
 
 ```yaml
 - name: Check version
   id: version-check
-  uses: joshjohanning/npm-version-check-action@v1
+  uses: joshjohanning/npm-version-check-action@v2
 
 - name: Print version info
   run: |
@@ -143,10 +169,14 @@ jobs:
 2. **Intelligent Dependency Analysis**: For package files, distinguishes between:
    - **Functional changes**: Actual dependency additions, updates, or removals that affect functionality
    - **Metadata changes**: Version bumps, description updates, scripts changes, or devDependency changes that don't affect runtime
-3. **Version Extraction**: Reads the current version from `package.json`
-4. **Tag Comparison**: Fetches the latest git tag and compares versions
-5. **Semantic Validation**: Ensures the new version is higher than the previous release
-6. **Clear Feedback**: Provides success or error messages with actionable hints
+3. **Version Consistency Check**: Validates that `package.json` and `package-lock.json` have matching versions
+   - Prevents issues where one file is updated but the other is not (e.g., after rebasing or manual edits)
+   - Fails the build with a clear error message if versions don't match
+4. **Version Extraction**: Reads the current version from `package.json`
+5. **Tag Comparison**: Fetches the latest git tag and compares versions
+6. **Semantic Validation**: Ensures the new version is higher than the previous release
+7. **Runtime Change Detection**: Checks if `action.yml` changed its Node.js Actions runtime and requires a major version bump
+8. **Clear Feedback**: Provides success or error messages with actionable hints
 
 ### Smart File Detection
 
@@ -165,20 +195,20 @@ The action intelligently handles different types of file changes:
   - ✅ **Triggers check**: Changes to `dependencies`, `peerDependencies`, `optionalDependencies`, `bundleDependencies`
   - ✅ **Triggers check (configurable)**: Changes to `devDependencies` when `include-dev-dependencies: true`
   - ❌ **Skips check**: Changes to `version`, `description`, `scripts`, `author`, etc.
-- `package-lock.json` - **Smart handling based on devDependencies configuration**
+- `package-lock.json` - **Smart handling with dependency tree analysis**
   - ✅ **Always triggers check**: Production dependency changes (new packages, version updates, integrity changes)
   - 🔄 **Configurable behavior**: When only devDependencies changed in package.json:
-    - ❌ **Skips check** if `include-dev-dependencies: false` (default) - package-lock.json changes are ignored
+    - ❌ **Skips check** if `include-dev-dependencies: false` (default) - lockfile changes caused by devDependency updates (including shared transitive dependency reshuffling) are correctly identified and ignored
     - ✅ **Triggers check** if `include-dev-dependencies: true` - package-lock.json changes are analyzed
   - ❌ **Skips check**: Pure metadata changes (version bumps, format updates)
 
-#### 🎯 Key Improvement: Simplified DevDependency Logic
+#### 🎯 Key Improvement: Dependency Tree Walking for Lockfile Analysis
 
 When `include-dev-dependencies: false` (default) and only devDependencies change in package.json:
 
-- The action **completely skips** package-lock.json analysis
-- This prevents false positives where massive lock file changes from dev dependency updates incorrectly trigger version bump requirements
-- Much simpler and more reliable than trying to filter dev dependencies from complex lock file structures
+- The action walks the dependency tree from each changed devDependency to identify which lockfile changes are attributable to the devDep update
+- Shared transitive dependencies (packages used by both production and dev trees) that get reshuffled by npm are correctly treated as dev-only changes, even when npm nests them under production dependency paths (e.g., `node_modules/cliui/node_modules/ansi-regex`), but only when corroborated by a confirmed dev-attributable change of the same package name at another path
+- Lockfile changes to packages whose **name** does not appear in any confirmed dev-attributable changed entry are still flagged as production changes (e.g., intentional transitive bumps for security fixes)
 
 This intelligent approach prevents unnecessary version bumps when only non-functional changes are made.
 
@@ -199,11 +229,11 @@ This intelligent approach prevents unnecessary version bumps when only non-funct
 For monorepos with multiple packages:
 
 ```yaml
-- uses: joshjohanning/npm-version-check-action@v1
+- uses: joshjohanning/npm-version-check-action@v2
   with:
     package-path: 'packages/frontend/package.json'
 
-- uses: joshjohanning/npm-version-check-action@v1
+- uses: joshjohanning/npm-version-check-action@v2
   with:
     package-path: 'packages/backend/package.json'
 ```
@@ -213,7 +243,7 @@ For monorepos with multiple packages:
 If your tags don't use the `v` prefix:
 
 ```yaml
-- uses: joshjohanning/npm-version-check-action@v1
+- uses: joshjohanning/npm-version-check-action@v2
   with:
     tag-prefix: 'release-' # For tags like 'release-1.0.0'
 ```
@@ -223,7 +253,7 @@ If your tags don't use the `v` prefix:
 To always validate version regardless of changed files:
 
 ```yaml
-- uses: joshjohanning/npm-version-check-action@v1
+- uses: joshjohanning/npm-version-check-action@v2
   with:
     skip-files-check: 'true'
 ```
@@ -235,7 +265,7 @@ By default, `devDependencies` changes don't trigger version bump requirements si
 #### Default Behavior (Ignore DevDependencies) - Recommended
 
 ```yaml
-- uses: joshjohanning/npm-version-check-action@v1
+- uses: joshjohanning/npm-version-check-action@v2
   with:
     include-dev-dependencies: 'false' # Default - devDeps don't require version bump
 ```
@@ -251,7 +281,7 @@ By default, `devDependencies` changes don't trigger version bump requirements si
 For libraries where build tools/devDependencies can affect the published package:
 
 ```yaml
-- uses: joshjohanning/npm-version-check-action@v1
+- uses: joshjohanning/npm-version-check-action@v2
   with:
     include-dev-dependencies: 'true' # devDeps changes require version bump
 ```
@@ -305,12 +335,12 @@ You can customize the skip keyword or disable this feature entirely:
 
 ```yaml
 # Use a custom keyword
-- uses: joshjohanning/npm-version-check-action@v1
+- uses: joshjohanning/npm-version-check-action@v2
   with:
     skip-version-keyword: '[no bump]'
 
 # Disable skip functionality entirely
-- uses: joshjohanning/npm-version-check-action@v1
+- uses: joshjohanning/npm-version-check-action@v2
   with:
     skip-version-keyword: ''
 ```
@@ -335,6 +365,33 @@ Ensure your `package.json` has a valid `version` field:
 ### "Warning: Could not fetch git tags"
 
 The action automatically fetches git tags to work with shallow clones. If this warning appears, it means there was an issue fetching tags, but the action will continue with limited functionality. This is rare and usually indicates network or permission issues.
+
+### Node.js Actions Runtime Change Detection
+
+When `skip-major-on-actions-runtime-change` is `false` (default), the action compares the `runs.using` field in `action.yml` between the base and head of the PR. If the Node.js Actions runtime version changes (e.g., `node20` to `node24`), a **major** version bump is required.
+
+This follows the convention used by popular GitHub Actions (like `actions/checkout`, `actions/setup-node`, etc.) where runtime upgrades are treated as breaking changes since they may affect consumers who pin to specific major versions.
+
+```yaml
+# action.yml before:
+runs:
+  using: 'node20'
+
+# action.yml after:
+runs:
+  using: 'node24'
+
+# Requires: v1.x.x -> v2.0.0 (major version bump)
+# Would fail: v1.x.x -> v1.x.x (minor/patch bump)
+```
+
+To disable this check:
+
+```yaml
+- uses: joshjohanning/npm-version-check-action@v2
+  with:
+    skip-major-on-actions-runtime-change: 'true'
+```
 
 ### "Version check passed but I expected it to fail"
 

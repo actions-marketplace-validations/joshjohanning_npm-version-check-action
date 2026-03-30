@@ -41,6 +41,10 @@ const PACKAGE_JSON_FILENAME = 'package.json';
 const PACKAGE_LOCK_JSON_FILENAME = 'package-lock.json';
 const PACKAGE_FILENAMES = [PACKAGE_JSON_FILENAME, PACKAGE_LOCK_JSON_FILENAME];
 
+// Node runtime detection constants
+const RUNS_BLOCK_PATTERN = /^runs[^\S\r\n]*:/m;
+const DEFAULT_ACTION_YML_PATH = 'action.yml';
+
 /**
  * Log a message using GitHub Actions core logging
  */
@@ -259,13 +263,13 @@ export async function getCommitsWithMessages(token) {
 
   const prNumber = context.payload.pull_request?.number;
   if (!prNumber) {
-    logMessage('⚠️  Could not determine PR number', 'warning');
+    logMessage('⚠️ Could not determine PR number', 'warning');
     return [];
   }
 
   // Use GitHub API to get commits - works with shallow clones
   if (!token) {
-    logMessage('⚠️  No token provided, cannot fetch PR commits via API', 'warning');
+    logMessage('⚠️ No token provided, cannot fetch PR commits via API', 'warning');
     return [];
   }
 
@@ -286,7 +290,7 @@ export async function getCommitsWithMessages(token) {
       message: commit.commit.message // Full commit message for keyword matching
     }));
   } catch (error) {
-    logMessage(`⚠️  Could not fetch PR commits via API: ${error.message}`, 'warning');
+    logMessage(`⚠️ Could not fetch PR commits via API: ${error.message}`, 'warning');
     return [];
   }
 }
@@ -311,7 +315,7 @@ export async function getFilesForCommit(sha, octokit, owner, repo) {
 
     return commit.files ? commit.files.map(f => f.filename) : [];
   } catch (error) {
-    logMessage(`⚠️  Could not fetch files for commit ${sha.substring(0, 7)}: ${error.message}`, 'warning');
+    logMessage(`⚠️ Could not fetch files for commit ${sha.substring(0, 7)}: ${error.message}`, 'warning');
     return [];
   }
 }
@@ -344,7 +348,7 @@ export async function getChangedFilesWithSkipSupport(skipKeyword, token) {
 
     if (shouldSkip) {
       skippedCommits++;
-      logMessage(`⏭️  Skipping commit ${commit.sha.substring(0, 7)}: "${commit.message}"`, 'debug');
+      logMessage(`⏭️ Skipping commit ${commit.sha.substring(0, 7)}: "${commit.message}"`, 'debug');
     } else {
       nonSkippedCommits.push(commit);
     }
@@ -568,6 +572,92 @@ function areAllChangesDevDependencies(baseLock, headLock, changedKeys) {
 }
 
 /**
+ * Resolve a dependency name to its lockfile key using npm's node_modules resolution algorithm.
+ * Given a parent package key and a dependency name, walks up the directory tree to find
+ * where npm installed the dependency (nested or hoisted).
+ * @param {Object} lockPackages - The packages section of a package-lock.json
+ * @param {string} parentKey - The lockfile key of the parent package (e.g., 'node_modules/jest/node_modules/chalk')
+ * @param {string} depName - The dependency name to resolve (e.g., 'ansi-regex')
+ * @returns {string|null} The lockfile key where the dependency is installed, or null if not found
+ */
+function resolveDepKey(lockPackages, parentKey, depName) {
+  // Try nested first: node_modules/jest/node_modules/chalk -> node_modules/jest/node_modules/chalk/node_modules/depName
+  // Then walk up: node_modules/jest/node_modules/depName, then node_modules/depName
+  let searchBase = parentKey;
+
+  while (searchBase) {
+    const candidate = `${searchBase}/node_modules/${depName}`;
+    if (lockPackages[candidate] !== undefined) {
+      return candidate;
+    }
+
+    // Walk up: strip the last /node_modules/xxx segment
+    const lastNM = searchBase.lastIndexOf('/node_modules/');
+    if (lastNM === -1) {
+      break;
+    }
+    searchBase = searchBase.substring(0, lastNM);
+  }
+
+  // Finally try top-level
+  const topLevel = `node_modules/${depName}`;
+  if (lockPackages[topLevel] !== undefined) {
+    return topLevel;
+  }
+
+  return null;
+}
+
+/**
+ * Extract the package name from a lockfile key.
+ * For 'node_modules/cliui/node_modules/ansi-regex' returns 'ansi-regex'.
+ * For 'node_modules/@scope/pkg' returns '@scope/pkg'.
+ * @param {string} lockfileKey - The lockfile package key
+ * @returns {string|null} The package name, or null if not a valid key
+ */
+function extractPackageName(lockfileKey) {
+  const prefix = 'node_modules/';
+  const lastNM = lockfileKey.lastIndexOf(prefix);
+  if (lastNM === -1) return null;
+  return lockfileKey.substring(lastNM + prefix.length);
+}
+
+/**
+ * Walk the dependency tree in a lockfile's packages section to find all transitive
+ * dependencies reachable from a set of starting packages.
+ * Uses npm's node_modules resolution algorithm to handle nested and hoisted packages.
+ * @param {Object} lockPackages - The packages section of a package-lock.json
+ * @param {string[]} startKeys - Array of package keys to start walking from (e.g., ['node_modules/jest'])
+ * @returns {Set<string>} Set of all reachable package keys including the start keys
+ */
+function getTransitiveDeps(lockPackages, startKeys) {
+  const visited = new Set();
+  const queue = [...startKeys];
+  let i = 0;
+
+  while (i < queue.length) {
+    const key = queue[i++];
+    if (visited.has(key)) continue;
+    visited.add(key);
+
+    const pkg = lockPackages[key];
+    if (!pkg) continue;
+
+    // Follow dependencies, optionalDependencies, and peerDependencies to reach all transitives.
+    // npm v7+ auto-installs peerDependencies, so they can be reshuffled by devDep updates.
+    const deps = { ...(pkg.dependencies || {}), ...(pkg.optionalDependencies || {}), ...(pkg.peerDependencies || {}) };
+    for (const depName of Object.keys(deps)) {
+      const resolvedKey = resolveDepKey(lockPackages, key, depName);
+      if (resolvedKey && !visited.has(resolvedKey)) {
+        queue.push(resolvedKey);
+      }
+    }
+  }
+
+  return visited;
+}
+
+/**
  * Check if package files have actual dependency changes (not just metadata changes)
  * This covers both package.json and package-lock.json files
  * @param {string[]|null} changedFiles - Optional list of changed files to filter which package files to check.
@@ -609,6 +699,7 @@ export async function hasPackageDependencyChanges(changedFiles = null) {
 
     let hasProductionChanges = false;
     let hasAnyDevChanges = false;
+    const changedDevDepNames = new Set();
 
     // Check package.json for dependency changes using proper JSON parsing
     if (shouldCheckPackageJson) {
@@ -650,6 +741,16 @@ export async function hasPackageDependencyChanges(changedFiles = null) {
             } else {
               logMessage('Debug: Only devDependencies changed in package.json', 'debug');
             }
+
+            // Collect names of changed dev dependencies for lockfile tree walking analysis
+            const baseDevDeps = basePackageJson.devDependencies || {};
+            const headDevDeps = headPackageJson.devDependencies || {};
+            const allDevNames = new Set([...Object.keys(baseDevDeps), ...Object.keys(headDevDeps)]);
+            for (const name of allDevNames) {
+              if (baseDevDeps[name] !== headDevDeps[name]) {
+                changedDevDepNames.add(name);
+              }
+            }
           }
         } catch (error) {
           // If JSON parsing fails, conservatively assume a change
@@ -661,6 +762,13 @@ export async function hasPackageDependencyChanges(changedFiles = null) {
         return { hasChanges: true, onlyDevDependencies: false };
       }
     }
+
+    // After package.json analysis: if package.json was checked, showed zero production
+    // dependency section changes, AND confirmed devDependency changes, record that fact.
+    // This is used to gate the lockfile analysis below, because npm can reshuffle the
+    // lockfile tree (hoisting, deduplication) as a side-effect of any dependency change,
+    // and those reshuffled packages may lack "dev": true.
+    const packageJsonHasOnlyDevChanges = shouldCheckPackageJson && !hasProductionChanges && hasAnyDevChanges;
 
     // Check package-lock.json for actual dependency changes
     if (shouldCheckPackageLock) {
@@ -708,6 +816,87 @@ export async function hasPackageDependencyChanges(changedFiles = null) {
                 } else {
                   logMessage('Debug: Only devDependencies changed in package-lock.json', 'debug');
                 }
+              } else if (packageJsonHasOnlyDevChanges) {
+                // package.json shows only devDependency changes. Walk the dependency tree
+                // from changed devDeps to determine if non-dev lockfile changes are just
+                // reshuffling (transitive deps of the changed devDeps) or genuine production
+                // changes (e.g., intentional transitive bumps for security fixes).
+                const headPkgs = headLock.packages || {};
+                const basePkgs = baseLock.packages || {};
+
+                if (Object.keys(headPkgs).length > 0 || Object.keys(basePkgs).length > 0) {
+                  const startKeys = [...changedDevDepNames].map(n => `node_modules/${n}`);
+                  const headTransitives = getTransitiveDeps(headPkgs, startKeys);
+                  const baseTransitives = getTransitiveDeps(basePkgs, startKeys);
+                  const devTransitives = new Set([...headTransitives, ...baseTransitives]);
+
+                  // Build a set of package names that have a *confirmed* dev-attributable
+                  // changed entry (either reachable via tree walk or marked dev: true).
+                  // Used for fallback reshuffling detection: npm may nest the same package
+                  // at a different path than the tree walk finds, but we only allow the
+                  // name-based fallback if there's corroborating evidence that the dev
+                  // update actually affected this package name.
+                  const confirmedDevChangedNames = new Set();
+                  for (const cKey of changedKeys) {
+                    const cHeadPkg = headPkgs[cKey];
+                    const cBasePkg = basePkgs[cKey];
+                    const isDev = (cHeadPkg && cHeadPkg.dev) || (!cHeadPkg && cBasePkg && cBasePkg.dev);
+                    if (isDev || devTransitives.has(cKey)) {
+                      const name = extractPackageName(cKey);
+                      if (name) confirmedDevChangedNames.add(name);
+                    }
+                  }
+
+                  let hasNonAttributableChange = false;
+                  for (const key of changedKeys) {
+                    const headPkg = headPkgs[key];
+                    const basePkg = basePkgs[key];
+                    // Skip packages already known to be dev-only
+                    if ((headPkg && headPkg.dev) || (!headPkg && basePkg && basePkg.dev)) continue;
+
+                    if (!devTransitives.has(key)) {
+                      // Fallback: check if the package name (regardless of nesting path)
+                      // also changed at another path that IS confirmed as a dev change.
+                      // This handles npm reshuffling where a package is moved to a different
+                      // node_modules nesting level, but only when there's corroborating
+                      // evidence (another changed instance of the same package that is
+                      // reachable from dev deps or marked dev: true).
+                      const pkgName = extractPackageName(key);
+                      if (pkgName && confirmedDevChangedNames.has(pkgName)) {
+                        logMessage(
+                          `Debug: lockfile change at ${key} attributed to devDependency reshuffling (package name ${pkgName} also changed at a confirmed dev path)`,
+                          'debug'
+                        );
+                        continue;
+                      }
+
+                      logMessage(`Debug: lockfile change not attributable to devDependency update: ${key}`, 'debug');
+                      hasNonAttributableChange = true;
+                      break;
+                    }
+                  }
+
+                  if (hasNonAttributableChange) {
+                    logMessage(
+                      'Debug: package-lock.json has production changes alongside devDependency reshuffling',
+                      'debug'
+                    );
+                    hasProductionChanges = true;
+                  } else {
+                    logMessage(
+                      'Debug: all non-dev lockfile changes are transitives of changed devDependencies - treating as reshuffling',
+                      'debug'
+                    );
+                    hasAnyDevChanges = true;
+                  }
+                } else {
+                  // No packages section available (old lockfile format) - can't walk tree, be conservative
+                  logMessage(
+                    'Debug: package-lock.json has non-dev changes but no packages section for tree analysis - treating as production',
+                    'debug'
+                  );
+                  hasProductionChanges = true;
+                }
               } else {
                 logMessage('Debug: package-lock.json has production dependency changes', 'debug');
                 hasProductionChanges = true;
@@ -738,6 +927,100 @@ export async function hasPackageDependencyChanges(changedFiles = null) {
     logMessage(`Warning: Could not check package dependency changes: ${error.message}`, 'warning');
     return { hasChanges: true, onlyDevDependencies: false };
   }
+}
+
+/**
+ * Parse the Node.js runtime version from action.yml content.
+ * Finds the runs: block and extracts the version from the using: field.
+ * Handles flexible key ordering, comments, and \\r\\n line endings.
+ * @param {string} content - The raw content of an action.yml file
+ * @returns {number|null} The Node.js runtime version number, or null if not found or not a node runtime
+ */
+export function parseNodeRuntime(content) {
+  if (!content || typeof content !== 'string') return null;
+
+  // Find where the runs: block starts
+  const runsMatch = content.match(RUNS_BLOCK_PATTERN);
+  if (!runsMatch) return null;
+
+  // Extract the runs: block (from runs: to the next top-level key or end of file)
+  const runsStart = runsMatch.index + runsMatch[0].length;
+  const runsContent = content.substring(runsStart);
+
+  // Find using: within the runs block, stopping at the next top-level key (non-indented line with a colon)
+  const lines = runsContent.split(/\r?\n/);
+  for (const line of lines) {
+    // Stop at the next top-level key (non-empty, non-comment, no leading whitespace, has a colon)
+    if (/^[a-zA-Z]/.test(line) && line.includes(':')) break;
+
+    // Skip YAML comments
+    if (line.trimStart().startsWith('#')) continue;
+
+    // Only match the using key at the start of the line (with indentation)
+    const usingMatch = line.match(/^\s+using:[^\S\r\n]*['"]?(node(\d+))['"]?/);
+    if (usingMatch) {
+      const version = parseInt(usingMatch[2], 10);
+      return isNaN(version) ? null : version;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Detect if the Node.js runtime version changed in action.yml between base and head refs.
+ * @param {string} baseRef - The base git ref (SHA)
+ * @param {string} headRef - The head git ref (SHA)
+ * @param {string} actionYmlPath - Path to the action.yml file
+ * @returns {Promise<{changed: boolean, baseVersion: number|null, headVersion: number|null}>}
+ */
+export async function detectNodeRuntimeChange(baseRef, headRef, actionYmlPath) {
+  const result = { changed: false, baseVersion: null, headVersion: null };
+
+  try {
+    const sanitizedBaseRef = sanitizeSHA(baseRef, 'baseRef');
+    const sanitizedHeadRef = sanitizeSHA(headRef, 'headRef');
+
+    const baseContent = await getFileAtRef(actionYmlPath, sanitizedBaseRef);
+    const headContent = await getFileAtRef(actionYmlPath, sanitizedHeadRef);
+
+    if (!baseContent || !headContent) {
+      // action.yml doesn't exist at one or both refs - skip check
+      return result;
+    }
+
+    result.baseVersion = parseNodeRuntime(baseContent);
+    result.headVersion = parseNodeRuntime(headContent);
+
+    if (result.baseVersion !== null && result.headVersion !== null && result.baseVersion !== result.headVersion) {
+      result.changed = true;
+    }
+
+    return result;
+  } catch (error) {
+    logMessage(`Warning: Could not check action.yml runtime change: ${error.message}`, 'warning');
+    return result;
+  }
+}
+
+/**
+ * Check if the version bump is a major version bump.
+ * @param {string} currentVersion - The current version string (e.g., '2.0.0')
+ * @param {string} previousVersion - The previous version string (e.g., '1.2.3')
+ * @returns {boolean} True if the major version increased
+ */
+export function isMajorVersionBump(currentVersion, previousVersion) {
+  if (
+    !currentVersion ||
+    !previousVersion ||
+    typeof currentVersion !== 'string' ||
+    typeof previousVersion !== 'string'
+  ) {
+    return false;
+  }
+  const currentMajor = parseInt(currentVersion.split('.')[0], 10);
+  const previousMajor = parseInt(previousVersion.split('.')[0], 10);
+  return !isNaN(currentMajor) && !isNaN(previousMajor) && currentMajor > previousMajor;
 }
 
 /**
@@ -773,6 +1056,68 @@ export function readPackageJson(packagePath) {
       throw new Error(`Invalid JSON in ${packagePath}: ${error.message}`);
     }
     throw error;
+  }
+}
+
+/**
+ * Validates that package.json and package-lock.json have consistent versions.
+ * This prevents issues where one file is updated but the other is not.
+ *
+ * @param {string} packagePath - Path to the package.json file
+ * @returns {{isValid: boolean, packageVersion: string|null, lockVersion: string|null, error: string|null}} Validation result
+ */
+export function validatePackageVersionConsistency(packagePath) {
+  const result = {
+    isValid: true,
+    packageVersion: null,
+    lockVersion: null,
+    error: null
+  };
+
+  try {
+    // Read package.json
+    if (!fs.existsSync(packagePath)) {
+      result.isValid = false;
+      result.error = `package.json not found at path: ${packagePath}`;
+      return result;
+    }
+
+    const packageContent = fs.readFileSync(packagePath, 'utf8');
+    const packageJson = JSON.parse(packageContent);
+    result.packageVersion = packageJson.version || null;
+
+    // Derive package-lock.json path from package.json path
+    const packageDir = path.dirname(packagePath);
+    const lockPath = path.join(packageDir, PACKAGE_LOCK_JSON_FILENAME);
+
+    // Check if package-lock.json exists
+    if (!fs.existsSync(lockPath)) {
+      // package-lock.json doesn't exist - this is acceptable, some projects don't use it
+      logMessage('ℹ️ No package-lock.json found, skipping version consistency check', 'debug');
+      return result;
+    }
+
+    // Read package-lock.json
+    const lockContent = fs.readFileSync(lockPath, 'utf8');
+    const lockJson = JSON.parse(lockContent);
+    result.lockVersion = lockJson.version || null;
+
+    // Compare versions
+    if (result.packageVersion && result.lockVersion && result.packageVersion !== result.lockVersion) {
+      result.isValid = false;
+      result.error = `Version mismatch: package.json has version "${result.packageVersion}" but package-lock.json has version "${result.lockVersion}". Run 'npm install' to sync the versions.`;
+    }
+
+    return result;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      result.isValid = false;
+      result.error = `Invalid JSON: ${error.message}`;
+      return result;
+    }
+    result.isValid = false;
+    result.error = error.message;
+    return result;
   }
 }
 
@@ -839,12 +1184,12 @@ export function compareVersions(current, previous) {
  */
 export async function fetchTags() {
   try {
-    logMessage('🏷️  Fetching git tags...');
+    logMessage('🏷️ Fetching git tags...');
     await execGit(['fetch', '--tags']);
     logMessage('✅ Git tags fetched successfully');
   } catch (error) {
     core.warning(`Could not fetch git tags: ${error.message}. Some version comparisons may be limited.`);
-    logMessage(`⚠️  Warning: Could not fetch git tags: ${error.message}`, 'warning');
+    logMessage(`⚠️ Warning: Could not fetch git tags: ${error.message}`, 'warning');
   }
 }
 
@@ -866,6 +1211,8 @@ export async function run() {
     const packagePath = core.getInput('package-path') || 'package.json';
     const tagPrefix = core.getInput('tag-prefix') || 'v';
     const skipFilesCheck = core.getInput('skip-files-check') === 'true';
+    const skipVersionConsistencyCheck = core.getInput('skip-version-consistency-check') === 'true';
+    const skipMajorOnActionsRuntimeChange = core.getInput('skip-major-on-actions-runtime-change') === 'true';
     // Handle skip-version-keyword: empty string explicitly disables, undefined/not-set uses default
     const skipKeywordInput = core.getInput('skip-version-keyword');
     const skipVersionKeyword = skipKeywordInput === '' ? '' : skipKeywordInput || DEFAULT_SKIP_KEYWORD;
@@ -874,6 +1221,8 @@ export async function run() {
     logMessage(`Package path: ${packagePath}`);
     logMessage(`Tag prefix: ${tagPrefix}`);
     logMessage(`Skip files check: ${skipFilesCheck}`);
+    logMessage(`Skip version consistency check: ${skipVersionConsistencyCheck}`);
+    logMessage(`Skip major on actions runtime change: ${skipMajorOnActionsRuntimeChange}`);
     if (skipVersionKeyword) {
       logMessage(`Skip version keyword: ${skipVersionKeyword}`);
     }
@@ -881,7 +1230,7 @@ export async function run() {
     // This action only works on pull request events
     if (github.context.eventName !== 'pull_request') {
       logMessage(
-        `⏭️  This action is designed for pull_request events. Current event: ${github.context.eventName}. Skipping version check.`
+        `⏭️ This action is designed for pull_request events. Current event: ${github.context.eventName}. Skipping version check.`
       );
       return;
     }
@@ -893,6 +1242,7 @@ export async function run() {
     core.setOutput('version-changed', 'false');
     core.setOutput('current-version', '');
     core.setOutput('previous-version', '');
+    core.setOutput('runtime-changed', 'false');
 
     // Check if we should run based on file changes
     if (!skipFilesCheck) {
@@ -906,23 +1256,23 @@ export async function run() {
         logMessage(`📋 Found ${result.totalCommits} commits in PR`);
         // If no commits were found (API error fallback), use regular getChangedFiles
         if (result.totalCommits === 0) {
-          logMessage('ℹ️  Could not analyze individual commits, using standard file diff');
+          logMessage('ℹ️ Could not analyze individual commits, using standard file diff');
           changedFiles = await getChangedFiles();
         } else {
           changedFiles = result.files;
           if (result.skippedCommits > 0) {
             logMessage(
-              `⏭️  Skipped ${result.skippedCommits} of ${result.totalCommits} commits containing "${skipVersionKeyword}"`,
+              `⏭️ Skipped ${result.skippedCommits} of ${result.totalCommits} commits containing "${skipVersionKeyword}"`,
               'notice'
             );
           } else {
-            logMessage(`ℹ️  No commits contained skip keyword, all ${result.totalCommits} commits included`);
+            logMessage(`ℹ️ No commits contained skip keyword, all ${result.totalCommits} commits included`);
           }
         }
       } else {
         if (skipVersionKeyword && !token) {
           logMessage(
-            '⚠️  skip-version-keyword requires a token input for API access, using standard file diff',
+            '⚠️ skip-version-keyword requires a token input for API access, using standard file diff',
             'warning'
           );
         }
@@ -938,13 +1288,29 @@ export async function run() {
       const hasPackageDepChanges = packageDepResult.hasChanges;
       const onlyDevDependencies = packageDepResult.onlyDevDependencies;
 
-      if (!hasRegularChanges && !hasPackageDepChanges) {
+      // Check if action.yml has an actual runtime change (not just metadata edits)
+      let hasRuntimeChange = false;
+      if (!skipMajorOnActionsRuntimeChange) {
+        const actionYmlChanged = changedFiles.some(
+          f => f === DEFAULT_ACTION_YML_PATH || f.endsWith(`/${DEFAULT_ACTION_YML_PATH}`)
+        );
+        if (actionYmlChanged) {
+          const baseRef = github.context.payload.pull_request?.base?.sha;
+          const headRef = github.context.sha;
+          if (baseRef && headRef) {
+            const earlyRuntimeCheck = await detectNodeRuntimeChange(baseRef, headRef, DEFAULT_ACTION_YML_PATH);
+            hasRuntimeChange = earlyRuntimeCheck.changed;
+          }
+        }
+      }
+
+      if (!hasRegularChanges && !hasPackageDepChanges && !hasRuntimeChange) {
         if (onlyDevDependencies) {
-          logMessage('⏭️  Only devDependency changes detected, skipping version check', 'warning');
+          logMessage('⏭️ Only devDependency changes detected, skipping version check', 'notice');
         } else {
           logMessage(
-            '⏭️  No JavaScript/TypeScript files or dependency changes detected, skipping version check',
-            'warning'
+            '⏭️ No JavaScript/TypeScript files or dependency changes detected, skipping version check',
+            'notice'
           );
         }
         return;
@@ -958,6 +1324,25 @@ export async function run() {
         const relevantFiles = changedFiles.filter(file => isRelevantFile(file));
         logMessage(`Changed files: ${relevantFiles.join(', ')}`);
       }
+      if (hasRuntimeChange && !hasRegularChanges && !hasPackageDepChanges) {
+        logMessage('✅ action.yml Node.js Actions runtime change detected, proceeding with version check...');
+      }
+    }
+
+    // Validate package.json and package-lock.json version consistency
+    if (!skipVersionConsistencyCheck) {
+      logMessage('🔄 Checking package.json and package-lock.json version consistency...');
+      const consistencyResult = validatePackageVersionConsistency(packagePath);
+      if (!consistencyResult.isValid) {
+        core.setFailed(`❌ ERROR: ${consistencyResult.error}`);
+        logMessage(`💡 HINT: Run 'npm install' to regenerate package-lock.json with the correct version`, 'notice');
+        return;
+      }
+      if (consistencyResult.lockVersion) {
+        logMessage(`✅ Version consistency check passed (${consistencyResult.packageVersion})`);
+      }
+    } else {
+      logMessage('⏭️ Skipping version consistency check (skip-version-consistency-check: true)');
     }
 
     // Read package.json
@@ -968,7 +1353,7 @@ export async function run() {
     core.setOutput('current-version', currentVersion);
 
     // Get latest tag
-    logMessage('🏷️  Fetching git tags...');
+    logMessage('🏷️ Fetching git tags...');
     const latestTag = await getLatestVersionTag(tagPrefix);
 
     if (!latestTag) {
@@ -984,7 +1369,7 @@ export async function run() {
     core.setOutput('previous-version', latestVersion);
 
     // Compare versions
-    logMessage('⚖️  Comparing versions...');
+    logMessage('⚖️ Comparing versions...');
     const comparison = compareVersions(currentVersion, latestVersion);
 
     switch (comparison) {
@@ -1013,6 +1398,38 @@ export async function run() {
         logMessage('🎯 Semantic versioning check passed!');
         core.setOutput('version-changed', 'true');
         break;
+    }
+
+    // Check if action.yml node runtime changed and require major version bump
+    if (!skipMajorOnActionsRuntimeChange) {
+      const baseRef = github.context.payload.pull_request?.base?.sha;
+      const headRef = github.context.sha;
+
+      if (baseRef && headRef) {
+        const runtimeChange = await detectNodeRuntimeChange(baseRef, headRef, DEFAULT_ACTION_YML_PATH);
+
+        if (runtimeChange.changed) {
+          logMessage(
+            `⚠️ Node.js Actions runtime changed: node${runtimeChange.baseVersion} -> node${runtimeChange.headVersion}`
+          );
+          core.setOutput('runtime-changed', 'true');
+
+          if (!isMajorVersionBump(currentVersion, latestVersion)) {
+            core.setFailed(
+              `❌ ERROR: action.yml Node.js Actions runtime changed from node${runtimeChange.baseVersion} to node${runtimeChange.headVersion}. This requires a MAJOR version bump (current: ${currentVersion}, previous: ${latestVersion}).`
+            );
+            logMessage(
+              `💡 HINT: Node.js Actions runtime changes are breaking changes for action consumers. Run 'npm version major' to increment the major version.`,
+              'notice'
+            );
+            return;
+          }
+
+          logMessage(
+            `✅ Major version bump detected for Node.js Actions runtime change (node${runtimeChange.baseVersion} -> node${runtimeChange.headVersion})`
+          );
+        }
+      }
     }
 
     logMessage('🏁 Version check completed successfully');
